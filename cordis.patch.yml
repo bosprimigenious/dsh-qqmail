@@ -1,0 +1,18 @@
+# dsh-qqmail bundle patch: inserts the plugin row into the profile roster.
+# Applied as a profile bundle layer (declared by the `dsh.bundle.patch`
+# manifest field in package.json). Activate with:
+#
+#   # local development (link)
+#   dsh plugin --profile add <包名>
+#   # after publishing to GitHub (repo tagged with the `dsh-plugin` topic)
+#   dsh plugin --profile web add github:zhengjy01/dsh-qqmail
+- insert:
+    - id: qqmail
+      name: '@zhengjunyao/dsh-qqmail'
+      config:
+        announceToAgent: true   # 在系统提示中公告插件（工具 + 能力说明）
+        enabled: true           # 插件总开关
+        # readOnly 是「首次生效的默认值」：真正的开关存在
+        # <DSH_HOME>/dsh-qqmail.json（用 qqmail_config 改，或在设置面板改）。
+        # true = 只注册读取类工具；发信/标记/删除/移动只在 false 时注册。
+        readOnly: true

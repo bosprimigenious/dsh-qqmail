@@ -1,0 +1,111 @@
+{
+  "name": "@zhengjunyao/dsh-qqmail",
+  "version": "0.0.0",
+  "description": "QQ Mail (and any IMAP/SMTP mailbox) for DeepSeek Harness: registers qqmail_* agent tools that list, search, read, send, reply to, flag and download mail through IMAP/SMTP with a QQ Mail authorization code (no OAuth, no 2FA redirect), plus a `qqmail` CLI and a `qqmail-mcp` stdio MCP server over the same core, and a web settings panel",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cli": "./lib/cli.js",
+    "./mcp": "./lib/mcp-server.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "qqmail": "lib/cli.js",
+    "qqmail-mcp": "lib/mcp-server.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    },
+    "engines": {
+      "dsh": ">=0.1.5-rc.1"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "qqmail",
+    "qq邮箱",
+    "email",
+    "imap",
+    "smtp",
+    "agent-email",
+    "mcp"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhengjy01/dsh-qqmail"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && tsdown && node scripts/postbuild.mjs",
+    "bundle": "tsdown && node scripts/postbuild.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/smoke.mjs && node tests/e2e.mjs && node tests/cli-mcp.mjs",
+    "test:e2e": "node tests/e2e.mjs",
+    "verify": "node scripts/portability.mjs --health /api/dsh-qqmail/status",
+    "verify:full": "node scripts/portability.mjs --health /api/dsh-qqmail/status --stability 30",
+    "verify:quick": "node scripts/portability.mjs --skip-audit --stability 5 --health /api/dsh-qqmail/status",
+    "test:cli": "node tests/cli-mcp.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "imapflow": "^2.0.2",
+    "mailparser": "^3.9.26",
+    "nodemailer": "^10.0.9"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1 || ^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1 || ^0.1.5-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1 || ^0.1.5-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1 || ^0.1.5-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1 || ^0.1.5-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1 || ^0.1.5-rc.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-connection": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-llm": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.1",
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^22.20.0",
+    "@types/nodemailer": "^7.0.2",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.5",
+    "lightningcss": "1.32.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "0.22.2",
+    "typescript": "~5.7.2"
+  }
+}

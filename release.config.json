@@ -1,0 +1,14 @@
+{
+  "$comment": "@zhengjunyao/dsh-qqmail 的发布配置，被 scripts/release.mjs 读取。",
+  "build": "pnpm build",
+  "aggregates": [
+    {
+      "name": "awesome-dsh-plugin（bruc3van，自动扫描型）",
+      "note": "仓库带 dsh-plugin topic 即由每日快照自动收录，无需手动同步；若聚合仓库支持提交条目则提 PR"
+    },
+    {
+      "name": "本机 web profile（可选）",
+      "note": "dsh plugin --profile web add @zhengjunyao/dsh-qqmail@<ver> —— 重启 dsh web 需先征得用户同意"
+    }
+  ]
+}
