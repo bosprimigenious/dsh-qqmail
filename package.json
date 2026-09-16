@@ -1,6 +1,6 @@
 {
   "name": "@zhengjunyao/dsh-qqmail",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "QQ Mail (and any IMAP/SMTP mailbox) for DeepSeek Harness: registers qqmail_* agent tools that list, search, read, send, reply to, flag and download mail through IMAP/SMTP with a QQ Mail authorization code (no OAuth, no 2FA redirect), plus a `qqmail` CLI and a `qqmail-mcp` stdio MCP server over the same core, and a web settings panel",
   "type": "module",
   "main": "lib/index.js",
