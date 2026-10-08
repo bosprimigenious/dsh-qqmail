@@ -19,6 +19,9 @@ export interface ServerSettings {
 
 /** A fully resolved account, ready to hand to the core. */
 export interface Account {
+  downloadDir: string
+  previewInList: boolean
+  saveSent: boolean
   /** Mailbox login (the full address, e.g. `someone@qq.com`). */
   email: string
   /** QQ Mail IMAP/SMTP authorization code (NOT the account password). */

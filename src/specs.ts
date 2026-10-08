@@ -359,10 +359,6 @@ export const qqmailConfigSpec: ToolSpec = {
       const view = await ctx.store.patch(patch)
       const after = ctx.store.readOnlySync()
       if (after.value !== before.value) ctx.onConfigChanged?.()
-      // A credential change invalidates any pooled connection.
-      if (patch.reset === true || patch.authCode !== undefined || patch.email !== undefined || patch.imapHost !== undefined) {
-        await ctx.service.closeAll()
-      }
       return {
         ok: true,
         message: '已更新 dsh-qqmail 配置：\n' + viewLines(view).join('\n'),

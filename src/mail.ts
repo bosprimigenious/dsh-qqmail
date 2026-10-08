@@ -148,7 +148,10 @@ export function matchesLocally(summary: MessageSummary, query: SearchQuery): boo
 
 /** The mail facade: one instance per plugin host (or per CLI run). */
 export class MailService {
+  private disposed = false
   private readonly sessions = new Map<string, ImapSession>()
+  private readonly generations = new Map<string, number>()
+  private readonly snapshots = new WeakMap<Account, number>()
   /** Auto-detected Sent folder per account ('' is a valid, cached answer). */
   private readonly sentFolders = new Map<string, string>()
 
@@ -159,28 +162,65 @@ export class MailService {
   constructor(
     private readonly store: MailStore,
     private readonly idleMs: number = DEFAULT_IDLE_MS,
-  ) {}
+  ) {
+    this.unsubscribe = store.onAccountsChanged((emails) => this.dropSessionsFor(emails))
+  }
+
+  private readonly unsubscribe: () => void
+
+  /** Release the Store hook when the host unloads. */
+  async dispose(): Promise<void> {
+    this.disposed = true
+    this.unsubscribe()
+    await this.closeAll()
+  }
+
+  /** Retire only affected accounts; drain queued commands before closing. */
+  async dropSessionsFor(emails: string | readonly string[]): Promise<void> {
+    const targets = new Set(typeof emails === 'string' ? [emails] : emails)
+    for (const email of targets) this.generations.set(email, (this.generations.get(email) ?? 0) + 1)
+    const pending: Promise<void>[] = []
+    for (const [key, session] of this.sessions) {
+      if (targets.has(key.split('|')[0]!)) {
+        this.sessions.delete(key)
+        pending.push(session.retire())
+      }
+    }
+    for (const email of targets) {
+      for (const key of [email, email + ':trash', email + ':drafts', email + ':junk']) this.sentFolders.delete(key)
+    }
+    await Promise.all(pending)
+  }
 
   /** Resolve the account or throw a readable error. */
-  private accountOrThrow(): Account {
+  private accountOrThrow(ref?: string): Account {
+    if (this.disposed) throw new Error('邮箱服务已卸载。')
     const config = this.store.readSync()
     const view = this.store.view()
-    const { account, error } = this.store.account(view, config)
+    const { account, error } = this.store.account(view, config, ref)
     if (error !== '') throw new Error(error)
+    const generation = this.generations.get(account.email) ?? 0
+    this.generations.set(account.email, generation)
+    this.snapshots.set(account, generation)
     return account
   }
 
+  private isCurrent(account: Account): boolean {
+    return this.snapshots.get(account) === (this.generations.get(account.email) ?? 0)
+  }
+
   /** Whether the stored config is complete enough to try connecting. */
-  isConfigured(): boolean {
-    return this.store.isConfigured(this.store.readSync())
+  isConfigured(ref?: string): boolean {
+    return this.store.isConfigured(this.store.readSync(), ref)
   }
 
   /** Get (or open) the pooled session for one account. */
   private session(account: Account): ImapSession {
+    if (!this.isCurrent(account)) throw new Error('邮箱配置已变更，请重试请求。')
     // The authorization code is hashed so a leaked heap dump or a log line
     // cannot recover the credential from a map key.
     const digest = createHash('sha256').update(account.authCode).digest('hex').slice(0, 12)
-    const key = [account.email, account.imap.host, String(account.imap.port), digest].join('|')
+    const key = [account.email, account.imap.host, String(account.imap.port), String(account.imap.secure), String(account.timeoutMs), digest].join('|')
     let session = this.sessions.get(key)
     if (session === undefined) {
       session = new ImapSession(
@@ -201,9 +241,11 @@ export class MailService {
 
   /** Close every pooled connection (host unload, CLI exit). */
   async closeAll(): Promise<void> {
+    for (const [email, generation] of this.generations) this.generations.set(email, generation + 1)
     const sessions = [...this.sessions.values()]
     this.sessions.clear()
-    await Promise.all(sessions.map((session) => session.drop()))
+    this.sentFolders.clear()
+    await Promise.all(sessions.map((session) => session.retire()))
   }
 
   /** Resolve the Sent folder, auto-detecting once per account. */
@@ -216,20 +258,20 @@ export class MailService {
     if (cached !== undefined) return cached
     const mailboxes = await listMailboxes(client, false)
     const found = pickSpecialFolder(mailboxes, 'sent')
-    this.sentFolders.set(account.email, found)
+    if (this.isCurrent(account)) this.sentFolders.set(account.email, found)
     return found
   }
 
   /** List mailboxes (folders) with optional message/unseen counts. */
-  async folders(includeStatus = false): Promise<MailboxInfo[]> {
-    const account = this.accountOrThrow()
+  async folders(includeStatus = false, ref?: string): Promise<MailboxInfo[]> {
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     return session.run((client) => listMailboxes(client, includeStatus))
   }
 
   /** Count messages and unseen messages in one mailbox. */
-  async count(mailbox: string): Promise<{ messages: number; unseen: number }> {
-    const account = this.accountOrThrow()
+  async count(mailbox: string, ref?: string): Promise<{ messages: number; unseen: number }> {
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     return session.run(async (client) => {
       const status = await client.status(mailbox, { messages: true, unseen: true })
@@ -241,10 +283,10 @@ export class MailService {
   }
 
   /** List the newest (or oldest) messages in a mailbox. */
-  async listMessages(options: ListOptions): Promise<SearchResult> {
-    const account = this.accountOrThrow()
+  async listMessages(options: ListOptions, ref?: string): Promise<SearchResult> {
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
-    const preview = options.preview ?? this.store.readSync().previewInList
+    const preview = options.preview ?? account.previewInList
     const mailbox = options.mailbox.trim() === '' ? 'INBOX' : options.mailbox.trim()
     return session.run((client) =>
       withMailbox(client, mailbox, account.timeoutMs, async () => {
@@ -273,8 +315,8 @@ export class MailService {
   }
 
   /** Search messages, falling back to an in-process filter for non-ASCII terms. */
-  async searchMessages(query: SearchQuery, options: SearchOptions): Promise<SearchResult> {
-    const account = this.accountOrThrow()
+  async searchMessages(query: SearchQuery, options: SearchOptions, ref?: string): Promise<SearchResult> {
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     const mailbox = query.mailbox.trim() === '' ? 'INBOX' : query.mailbox.trim()
     const { criteria, localOnly } = buildSearchCriteria(query)
@@ -336,8 +378,8 @@ export class MailService {
   }
 
   /** Read one or more messages in full. */
-  async readMessages(uids: readonly number[], options: ReadOptions): Promise<ReadResult> {
-    const account = this.accountOrThrow()
+  async readMessages(uids: readonly number[], options: ReadOptions, ref?: string): Promise<ReadResult> {
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     const mailbox = options.mailbox.trim() === '' ? 'INBOX' : options.mailbox.trim()
     const cap = account.maxParseMb * MB
@@ -381,8 +423,8 @@ export class MailService {
   }
 
   /** Send a message and archive the Sent copy. */
-  async send(input: SendInput): Promise<SendResult> {
-    const account = this.accountOrThrow()
+  async send(input: SendInput, ref?: string): Promise<SendResult> {
+    const account = this.accountOrThrow(ref)
     const recipients = [...input.to, ...input.cc, ...input.bcc].filter((entry) => entry.trim() !== '')
     if (recipients.length === 0) throw new Error('至少需要一个收件人（to / cc / bcc）。')
     if (input.subject.trim() === '' && input.text.trim() === '' && input.html.trim() === '') {
@@ -410,6 +452,7 @@ export class MailService {
           ' MB），已拒绝发送；可在配置里调大或去掉大附件。',
       )
     }
+    if (!this.isCurrent(account)) throw new Error('邮箱配置已变更，请重试请求。')
     const endpoint: SmtpEndpoint = {
       host: account.smtp.host,
       port: account.smtp.port,
@@ -420,7 +463,7 @@ export class MailService {
       requireTls: account.smtpRequireTls,
     }
     const result = await sendComposed(endpoint, composed)
-    const saveSent = input.saveSent ?? this.store.readSync().saveSent
+    const saveSent = input.saveSent ?? account.saveSent
     if (!saveSent) return result
     try {
       const session = this.session(account)
@@ -450,8 +493,9 @@ export class MailService {
     index: number,
     mailbox: string,
     outDir: string,
+    ref?: string,
   ): Promise<DownloadResult> {
-    const account = this.accountOrThrow()
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     const target = mailbox.trim() === '' ? 'INBOX' : mailbox.trim()
     return session.run((client) =>
@@ -494,8 +538,9 @@ export class MailService {
     uids: readonly number[],
     mailbox: string,
     actions: { seen?: boolean; flagged?: boolean },
+    ref?: string,
   ): Promise<{ changed: number; applied: string[] }> {
-    const account = this.accountOrThrow()
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     const target = mailbox.trim() === '' ? 'INBOX' : mailbox.trim()
     const add: string[] = []
@@ -516,8 +561,8 @@ export class MailService {
   }
 
   /** Move messages to another mailbox. */
-  async move(uids: readonly number[], from: string, destination: string): Promise<{ moved: number }> {
-    const account = this.accountOrThrow()
+  async move(uids: readonly number[], from: string, destination: string, ref?: string): Promise<{ moved: number }> {
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     const source = from.trim() === '' ? 'INBOX' : from.trim()
     if (destination.trim() === '') throw new Error('移动目标文件夹不能为空（destination）。')
@@ -538,8 +583,9 @@ export class MailService {
     uids: readonly number[],
     mailbox: string,
     permanent: boolean,
+    ref?: string,
   ): Promise<{ count: number; mode: 'trash' | 'permanent'; trashFolder: string }> {
-    const account = this.accountOrThrow()
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     const target = mailbox.trim() === '' ? 'INBOX' : mailbox.trim()
     return session.run((client) =>
@@ -565,13 +611,13 @@ export class MailService {
     if (cached !== undefined) return cached
     const mailboxes = await listMailboxes(client, false)
     const found = pickSpecialFolder(mailboxes, kind)
-    this.sentFolders.set(account.email + ':' + kind, found)
+    if (this.isCurrent(account)) this.sentFolders.set(account.email + ':' + kind, found)
     return found
   }
 
   /** Connect-and-authenticate probe for both protocols. */
-  async probe(): Promise<ProbeResult> {
-    const account = this.accountOrThrow()
+  async probe(ref?: string): Promise<ProbeResult> {
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     const smtp: SmtpEndpoint = {
       host: account.smtp.host,
@@ -618,8 +664,8 @@ export class MailService {
   }
 
   /** Attachment metadata for one message (without downloading bodies). */
-  async attachments(uid: number, mailbox: string): Promise<AttachmentMeta[]> {
-    const result = await this.readMessages([uid], { mailbox, html: false, markSeen: false })
+  async attachments(uid: number, mailbox: string, ref?: string): Promise<AttachmentMeta[]> {
+    const result = await this.readMessages([uid], { mailbox, html: false, markSeen: false }, ref)
     const item = result.items[0]
     if (item === undefined) {
       throw new Error(result.errors[0] ?? ('读取邮件 ' + String(uid) + ' 失败。'))
@@ -628,8 +674,8 @@ export class MailService {
   }
 
   /** Summaries for an explicit UID list (used by reply building and tests). */
-  async summaries(uids: readonly number[], mailbox: string, preview = false): Promise<MessageSummary[]> {
-    const account = this.accountOrThrow()
+  async summaries(uids: readonly number[], mailbox: string, preview = false, ref?: string): Promise<MessageSummary[]> {
+    const account = this.accountOrThrow(ref)
     const session = this.session(account)
     const target = mailbox.trim() === '' ? 'INBOX' : mailbox.trim()
     return session.run((client) =>

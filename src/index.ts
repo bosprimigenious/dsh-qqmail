@@ -150,7 +150,7 @@ export function apply(ctx: Context, config?: Config): void {
   // not leave the provider holding connections open.
   ctx.effect(
     () => () => {
-      void service.closeAll()
+      void service.dispose()
     },
     'dsh-qqmail: session cleanup',
   )
@@ -165,10 +165,14 @@ export {
   DEFAULT_MAX_SEND_MB,
   DEFAULT_TIMEOUT_MS,
   MailStore,
+  MAX_ACCOUNTS,
+  resolveAccountRef,
   configExists,
   configPath,
   dataDir,
   maskSecret,
+  type AccountConfig,
+  type AccountResolution,
   type ConfigPatch,
   type MailConfig,
   type MailConfigView,

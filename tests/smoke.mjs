@@ -185,7 +185,7 @@ console.log('\n▸ 配置存储（临时文件 + 0600）')
   await store.patch({ email: 'someone@qq.com', authCode: 'abcdefghijklmnop' })
   const mode = (await stat(store.file)).mode & 0o777
   check('配置文件权限为 0600', mode === 0o600, '0o' + mode.toString(8))
-  check('email 域名自动识别 preset', store.readSync().preset === 'qq')
+  check('email 域名自动识别 preset', store.readSync().accounts[0].preset === 'qq')
 
   const view = store.view()
   check('已配置', view.configured === true)

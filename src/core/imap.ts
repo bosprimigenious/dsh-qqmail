@@ -129,6 +129,7 @@ export class ImapSession {
   private queue: Promise<unknown> = Promise.resolve()
   /** Set by {@link run} while a command is in flight (suppresses idle close). */
   private busy = false
+  private retired = false
 
   constructor(
     private readonly endpoint: ImapEndpoint,
@@ -148,6 +149,7 @@ export class ImapSession {
    * @param fn - receives the live client; must not keep a reference to it.
    */
   async run<T>(fn: (client: ImapFlow) => Promise<T>): Promise<T> {
+    if (this.retired) throw new Error('邮箱配置已变更，请重试请求。')
     const task = this.queue.then(
       () => this.execute(fn),
       () => this.execute(fn),
@@ -214,7 +216,7 @@ export class ImapSession {
 
   /** Schedule the idle close (never while a command is running). */
   private armIdle(): void {
-    if (this.busy || this.idleMs <= 0) return
+    if (this.retired || this.busy || this.idleMs <= 0) return
     if (this.idleTimer !== null) clearTimeout(this.idleTimer)
     this.idleTimer = setTimeout(() => {
       this.idleTimer = null
@@ -222,6 +224,13 @@ export class ImapSession {
     }, this.idleMs)
     // Never keep a CLI process alive just to close an idle socket.
     this.idleTimer.unref?.()
+  }
+
+  /** Stop accepting new work, drain existing work (including opening), then close. */
+  async retire(): Promise<void> {
+    this.retired = true
+    await this.queue
+    await this.drop()
   }
 
   /** Close the pooled connection now (idempotent, never throws). */

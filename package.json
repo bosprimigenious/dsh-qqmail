@@ -63,7 +63,7 @@
     "build": "tsc -p tsconfig.build.json && tsdown && node scripts/postbuild.mjs",
     "bundle": "tsdown && node scripts/postbuild.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node tests/smoke.mjs && node tests/e2e.mjs && node tests/cli-mcp.mjs",
+    "test": "node tests/smoke.mjs && node tests/multi-account.mjs && node tests/e2e.mjs && node tests/cli-mcp.mjs",
     "test:e2e": "node tests/e2e.mjs",
     "verify": "node scripts/portability.mjs --health /api/dsh-qqmail/status",
     "verify:full": "node scripts/portability.mjs --health /api/dsh-qqmail/status --stability 30",
