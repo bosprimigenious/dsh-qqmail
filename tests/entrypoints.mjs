@@ -6,6 +6,7 @@ import http from 'node:http'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
 import {MailStore,MailService,buildSpecs,makeRoutes} from '../lib/index.js'
+import {startFakeImap} from './fakes.mjs'
 const exec=promisify(execFile)
 const root=await fs.mkdtemp(path.join(tmpdir(),'qqmail-entrypoints-'))
 let passed=0,failed=0
@@ -61,6 +62,22 @@ try{
   const r=await spec.handler({uid:100,text:'reply'},{store,service,workspaceDir:root})
   assert.equal(r.ok,change==='default');assert.equal(sent,change==='default')
   if(change==='credential') assert.match(r.message,/配置已变更/)
+ })
+ await test('CLI explicit false persists read-only and refuses destructive confirmation',async()=>{
+  const store=await setup('cli-booleans')
+  const imap=await startFakeImap({user:'alpha@example.test',password:'synthetic-alpha',messages:{INBOX:[{uid:100,raw:'From: fixture@example.test\r\nSubject: fixture\r\n\r\nbody\r\n'}]}})
+  const env={...process.env,DSH_QQMAIL_CONFIG:store.file,QQMAIL_AUTH_CODE:''}
+  const run=(args)=>exec(process.execPath,['lib/cli.js',...args,'--json'],{env})
+  try{
+   await store.patch({account:'alpha',preset:'custom',imapHost:'127.0.0.1',imapPort:imap.port,imapSecure:false,smtpHost:'127.0.0.1'})
+   await run(['config','--read-only','false']);store.invalidate();assert.equal(store.readOnlySync().value,false)
+   const before=await fs.readFile(store.file)
+   await assert.rejects(run(['accounts','remove','--account','alpha','--confirm','false']),e=>/confirm|确认/.test(e.stdout))
+   assert.deepEqual(await fs.readFile(store.file),before)
+   const result=JSON.parse((await run(['delete','100','--permanent','false'])).stdout)
+   assert.equal(result.ok,true);assert.equal(result.data.mode,'trash')
+   assert.deepEqual(imap.copies,[{from:'INBOX',to:'Deleted Messages',uids:[100]}])
+  }finally{await imap.close()}
  })
  await test('CLI config/management add and account selection use separate accounts',async()=>{
   const store=await setup('cli')

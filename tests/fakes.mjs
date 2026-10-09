@@ -378,7 +378,7 @@ export async function startFakeImap(options = {}) {
         if (criteria.includes('FLAGGED')) list = list.filter((entry) => entry.flags.has('\\Flagged'))
         // Enough string-criteria support to prove the server-side path filters.
         const fieldMatch = /(?:^|\s)(FROM|TO|SUBJECT|BODY|TEXT)\s+(?:"([^"]*)"|(\S+))/i.exec(rawCriteria)
-        if (fieldMatch !== null) {
+        if (fieldMatch !== null && !options.ignoreSearchFilters && !(options.ignoreTextSearch && fieldMatch[1].toUpperCase() === 'TEXT')) {
           const needle = (fieldMatch[2] ?? fieldMatch[3] ?? '').toLowerCase()
           if (needle !== '') {
             list = list.filter((entry) => entry.raw.toString('utf8').toLowerCase().includes(needle))

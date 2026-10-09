@@ -385,7 +385,12 @@ export function buildSearchCriteria(query: SearchQuery): {
   assign('to', query.to)
   assign('subject', query.subject)
   assign('body', query.body)
-  assign('text', query.text)
+  // Tencent may answer SEARCH TEXT with the whole mailbox. Use the visible
+  // fields our local fallback searches instead of trusting that search key.
+  if (query.text !== '') {
+    if (/[^\x20-\x7e]/.test(query.text)) localOnly = true
+    else criteria.or = ['from', 'to', 'subject', 'body'].map((key) => ({ [key]: query.text }))
+  }
   // Local midnight for a date-only value, which is what a user means by "since".
   const since = parseDate(query.since)
   if (since !== undefined) criteria.since = since

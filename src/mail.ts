@@ -319,7 +319,12 @@ export class MailService {
     const account = this.accountOrThrow(ref)
     const session = this.session(account)
     const mailbox = query.mailbox.trim() === '' ? 'INBOX' : query.mailbox.trim()
-    const { criteria, localOnly } = buildSearchCriteria(query)
+    const built = buildSearchCriteria(query)
+    const criteria = built.criteria
+    // Tencent enterprise IMAP can ignore every keyword predicate, not just
+    // TEXT. Use the explicit bounded local mode rather than report false hits.
+    const hasKeyword = [query.from, query.to, query.subject, query.body, query.text].some((value) => value !== '')
+    const localOnly = built.localOnly || (hasKeyword && this.store.view(ref).preset === 'qq-exmail')
     return session.run((client) =>
       withMailbox(client, mailbox, account.timeoutMs, async () => {
         /**
@@ -465,17 +470,39 @@ export class MailService {
     const result = await sendComposed(endpoint, composed)
     const saveSent = input.saveSent ?? account.saveSent
     if (!saveSent) return result
+    let attemptedFolder = ''
     try {
       const session = this.session(account)
       result.savedTo = await session.run(async (client) => {
         const folder = await this.resolveSentFolder(client, account)
         if (folder === '') return ''
+        attemptedFolder = folder
         const appended = await appendMessage(client, folder, composed.raw)
         return appended ? folder : ''
       })
     } catch (error) {
       // The mail is already delivered; a failed archive must not look like a
       // failed send.
+      // APPEND may have committed even when its acknowledgement was lost.
+      // Reconcile by this send's Message-ID; never repeat SMTP or APPEND.
+      const messageId = /^Message-ID:\s*([^\r\n]+)/im.exec(composed.raw.toString('utf8'))?.[1]?.trim()
+      if (attemptedFolder && messageId && this.isCurrent(account)) {
+        try {
+          const found = await this.session(account).run((client) =>
+            withMailbox(client, attemptedFolder, account.timeoutMs, async () => {
+              const candidates = await searchUids(client, { header: { 'Message-ID': messageId } })
+              // Some servers ignore HEADER too; confirm the returned header.
+              for (const uid of candidates.slice(-20).reverse()) {
+                const message = await client.fetchOne(String(uid), { headers: ['message-id'] }, { uid: true })
+                if (!message || !message.headers) continue
+                const actual = /^Message-ID:\s*([^\r\n]+)/im.exec(message.headers.toString('utf8'))?.[1]?.trim()
+                if (actual === messageId) return true
+              }
+              return false
+            }))
+          if (found) { result.savedTo = attemptedFolder; return result }
+        } catch { /* A failed read cannot prove the earlier APPEND failed. */ }
+      }
       result.saveError = describeImapError(error)
     }
     return result

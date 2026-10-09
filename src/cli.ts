@@ -65,10 +65,16 @@ export function parseArgs(argv: readonly string[]): Parsed {
       if (equals >= 0) {
         value = body.slice(equals + 1)
       } else if (BOOLEAN_FLAGS.has(key)) {
-        value = true
+        const next = argv[index + 1]
+        if (next === 'true' || next === 'false') {
+          value = next
+          index += 1
+        } else value = true
       } else {
         const next = argv[index + 1]
-        if (next === undefined || next.startsWith('--')) {
+        // Non-boolean options consume one value, including values beginning '--'.
+        // Use --key=value when passing a value identical to another option.
+        if (next === undefined) {
           value = true
         } else {
           value = next

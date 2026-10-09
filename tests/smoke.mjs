@@ -60,6 +60,14 @@ async function isolate() {
 
 const tempDir = await isolate()
 const realConfig = path.join(process.env.HOME ?? '', '.dsh', 'dsh-qqmail.json')
+/**
+ * Identity of the real config before the run starts.
+ *
+ * The isolation assertion at the end compares against this rather than testing for
+ * absence: a developer who has actually configured the plugin owns a real config, and
+ * "the file does not exist" would then fail for reasons unrelated to this test.
+ */
+const realConfigBefore = await stat(realConfig).then(({ mtimeMs, size }) => mtimeMs + ':' + size).catch(() => 'missing')
 
 console.log('\n▸ 参数规格 → JSON Schema')
 {
@@ -327,13 +335,29 @@ console.log('\n▸ CLI 参数解析')
   check('布尔 flag', parsed.flags.unseen === true && parsed.flags.json === true)
   const send = parseArgs(['send', '--to', 'a@b.com', '--attach', 'x.pdf', '--attach', 'y.pdf'])
   check('可重复 flag 累积', Array.isArray(send.flags.attach) && send.flags.attach.length === 2)
+  check('签名值保留双横线首行', parseArgs(['config', '--signature', '--\nfixture signature']).flags.signature === '--\nfixture signature')
+  check('普通双横线开头的值被保留', parseArgs(['config', '--signature', '--fixture']).flags.signature === '--fixture')
+  check('签名值可为双横线', parseArgs(['config', '--signature', '--']).flags.signature === '--')
   const equals = parseArgs(['list', '--limit=50'])
   check('--key=value 形式', equals.flags.limit === '50')
+  for (const key of ['read-only', 'permanent', 'confirm']) {
+    for (const literal of ['true', 'false']) {
+      const parsed = parseArgs(['delete', '--' + key, literal, '100'])
+      check('--' + key + ' ' + literal + ' 消费字面量并保留 uid', parsed.flags[key] === literal && parsed.positional.join() === '100')
+      check('--' + key + '=' + literal + ' 兼容', parseArgs(['delete', '--' + key + '=' + literal]).flags[key] === literal)
+    }
+  }
 }
 
 console.log('\n▸ 隔离性断言')
-check('真实配置未被创建', await stat(realConfig).then(() => 'exists').catch(() => 'missing') === 'missing' || realConfig !== path.join(process.env.DSH_HOME ?? '', 'dsh-qqmail.json'))
-check('临时配置目录已写入', (await readFile(process.env.DSH_QQMAIL_CONFIG, 'utf8').catch(() => '')).length >= 0)
+{
+  // The run must stay inside the temp dir — resolving to the real path would itself be the bug.
+  check('配置路径在临时目录内', (process.env.DSH_QQMAIL_CONFIG ?? '').startsWith(tempDir))
+  // And the real config must come out untouched, whether or not it already existed.
+  const realAfter = await stat(realConfig).then(({ mtimeMs, size }) => mtimeMs + ':' + size).catch(() => 'missing')
+  check('真实配置未被改动', realAfter === realConfigBefore, realConfigBefore + ' → ' + realAfter)
+  check('临时配置目录已写入', (await readFile(process.env.DSH_QQMAIL_CONFIG, 'utf8').catch(() => '')).length >= 0)
+}
 
 await rm(tempDir, { recursive: true, force: true })
 

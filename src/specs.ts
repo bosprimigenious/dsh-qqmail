@@ -457,7 +457,7 @@ export const qqmailSearchSpec: ToolSpec = {
     to: { type: 'string', description: '收件人包含该字符串' },
     subject: { type: 'string', description: '主题包含该字符串' },
     body: { type: 'string', description: '正文包含该字符串' },
-    text: { type: 'string', description: '全文（头+正文）包含该字符串' },
+    text: { type: 'string', description: '发件人、收件人、主题或正文包含该字符串；腾讯企业邮按最近400封本地过滤' },
     since: { type: 'string', description: '此日期及之后（YYYY-MM-DD 或 ISO）' },
     before: { type: 'string', description: '此日期之前（YYYY-MM-DD 或 ISO）' },
     unseen: { type: 'boolean', description: '只看未读' },
@@ -595,7 +595,7 @@ export const qqmailSendSpec: ToolSpec = {
         'Message-ID：' + (result.messageId === '' ? '(无)' : result.messageId),
       ]
       if (result.savedTo !== '') lines.push('已存副本到：' + result.savedTo)
-      else if (result.saveError !== '') lines.push('⚠️ 邮件已发出，但存副本失败：' + result.saveError)
+      else if (result.saveError !== '') lines.push('⚠️ 邮件已发出；副本保存状态未确认：' + result.saveError + '。请先检查已发送文件夹，勿重发邮件。')
       return {
         ok: true,
         message: lines.join('\n'),
@@ -688,7 +688,7 @@ export const qqmailReplySpec: ToolSpec = {
         'SMTP 回应：' + (result.response === '' ? '(无)' : result.response),
       ]
       if (result.savedTo !== '') lines.push('已存副本到：' + result.savedTo)
-      else if (result.saveError !== '') lines.push('⚠️ 回复已发出，但存副本失败：' + result.saveError)
+      else if (result.saveError !== '') lines.push('⚠️ 回复已发出；副本保存状态未确认：' + result.saveError + '。请先检查已发送文件夹，勿重发邮件。')
       return { ok: true, message: lines.join('\n'), data: result }
     }),
 }
