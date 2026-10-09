@@ -160,4 +160,4 @@ MIT
 
 BUPT 等腾讯企业邮箱域名请显式选择 preset:"qq-exmail"，不自动推测企业域名。签名、saveSent、previewInList、附件目录均为账号级，readOnly 为插件级。多账号默认附件按 id 分子目录；单账号保留旧路径。
 
-当前多账号 UI 和真实双邮箱验收尚未完成；先在隔离开发 profile 使用，暂不替换正在使用的 desktop。实现与验收说明见 docs/multi-account-core.md。
+多账号设置页支持新增、切换、设默认和确认删除；授权码草稿按账号保留，签名/saveSent/previewInList 属于账号，readOnly 属于插件。先在隔离开发 profile 验收，desktop 尚未替换；真实邮件与剩余门禁见 docs/multi-account-core.md。

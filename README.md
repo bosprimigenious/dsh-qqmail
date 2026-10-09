@@ -160,4 +160,4 @@ Use qqmail_config with account:"__new__" or qqmail_accounts action:"add" to add 
 
 For custom business/education domains hosted by Tencent, explicitly set preset:"qq-exmail". Signatures, saveSent, previewInList and download directories are account settings; readOnly is plugin-wide. Multi-account default downloads use per-id subdirectories, while single-account paths remain compatible.
 
-The multi-account UI and live dual-mailbox acceptance are pending. Use an isolated development profile before replacing an active desktop installation. See docs/multi-account-core.md.
+The settings panel supports adding, selecting, setting the default and confirming removal of accounts, with per-account drafts. Signature/saveSent/previewInList are account settings; readOnly is global. Validate in an isolated development profile before replacing an active desktop installation. Live-mail evidence and remaining acceptance gates are recorded in docs/multi-account-core.md.

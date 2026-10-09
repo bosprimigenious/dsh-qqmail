@@ -34,6 +34,8 @@ export interface ProbeResult {
   sentFolder: string
 }
 
+export interface AccountIdentity { id: string; email: string }
+
 /** The secret-free configuration view. */
 export interface ConfigView {
   configured: boolean
@@ -57,6 +59,7 @@ export interface ConfigView {
   previewInList: boolean
   saveSent: boolean
   configPath: string
+  account?: AccountIdentity
   probe?: ProbeResult
 }
 
@@ -68,6 +71,18 @@ export interface StatusResponse {
   presets: PresetInfo[]
   readOnly: boolean
 }
+
+export interface AccountView extends ConfigView { id: string; label: string }
+export interface AccountsView {
+  version: 2
+  defaultAccount: string
+  resolvedDefaultAccount: string
+  warning: string
+  accounts: AccountView[]
+}
+export interface AccountsResponse { ok: boolean; message: string; data: AccountsView }
+export interface ConfigResponse { ok: boolean; message: string; data?: ConfigView }
+export interface ProbeResponse extends ConfigResponse {}
 
 /** One mailbox folder. */
 export interface MailboxInfo {
@@ -129,6 +144,7 @@ export interface ToolPayload {
   ok: boolean
   message: string
   data?: {
+    account?: AccountIdentity
     mailbox?: string
     mode?: string
     total?: number
@@ -181,32 +197,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 /** The dsh-qqmail panel API. */
 export class QqmailApi {
   /** Plugin + account status; `probe` really connects to both servers. */
-  async status(probe = false): Promise<StatusResponse> {
-    return request<StatusResponse>('/api/dsh-qqmail/status' + (probe ? '?probe=1' : ''))
+  async status(probe = false, account?: string): Promise<StatusResponse> {
+    const query = new URLSearchParams()
+    if (probe) query.set('probe', '1')
+    if (account !== undefined) query.set('account', account)
+    return request<StatusResponse>('/api/dsh-qqmail/status' + (query.size ? '?' + query.toString() : ''))
   }
 
   /** Persist a config patch. */
-  async setConfig(patch: Record<string, unknown>): Promise<{ ok: boolean; message: string }> {
-    return request<{ ok: boolean; message: string }>('/api/dsh-qqmail/config', {
+  async setConfig(patch: Record<string, unknown>, account?: string): Promise<ConfigResponse> {
+    return request<ConfigResponse>('/api/dsh-qqmail/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
+      body: JSON.stringify(account === undefined ? patch : { ...patch, account }),
     })
   }
 
   /** Real connect-and-authenticate check. */
-  async probe(): Promise<{ ok: boolean; message: string }> {
-    return request('/api/dsh-qqmail/probe', { method: 'POST' })
+  async probe(account?: string): Promise<ProbeResponse> {
+    return request('/api/dsh-qqmail/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(account === undefined ? {} : { account }) })
+  }
+
+  async accounts(): Promise<AccountsResponse> { return request('/api/dsh-qqmail/accounts') }
+
+  async accountsAction(payload: { action: 'add'; [key: string]: unknown }): Promise<ConfigResponse>
+  async accountsAction(payload: { action: 'setDefault' | 'remove'; account: string; confirm?: boolean }): Promise<AccountsResponse>
+  async accountsAction(payload: { action: 'add' | 'setDefault' | 'remove'; account?: string; confirm?: boolean; [key: string]: unknown }): Promise<AccountsResponse | ConfigResponse> {
+    return request('/api/dsh-qqmail/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
   }
 
   /** List folders. */
-  async folders(): Promise<ToolPayload> {
-    return request<ToolPayload>('/api/dsh-qqmail/folders?status=1')
+  async folders(account?: string): Promise<ToolPayload> {
+    return request<ToolPayload>('/api/dsh-qqmail/folders?status=1' + (account === undefined ? '' : '&account=' + encodeURIComponent(account)))
   }
 
   /** List messages. */
-  async list(params: { mailbox?: string; limit?: number; unseen?: boolean } = {}): Promise<ToolPayload> {
+  async list(params: { mailbox?: string; limit?: number; unseen?: boolean; account?: string } = {}): Promise<ToolPayload> {
     const query = new URLSearchParams()
+    if (params.account !== undefined) query.set('account', params.account)
     if (params.mailbox !== undefined) query.set('mailbox', params.mailbox)
     query.set('limit', String(params.limit ?? 20))
     if (params.unseen === true) query.set('unseen', '1')
@@ -214,19 +243,21 @@ export class QqmailApi {
   }
 
   /** Search messages. */
-  async search(keyword: string, mailbox: string, limit = 20): Promise<ToolPayload> {
+  async search(keyword: string, mailbox: string, limit = 20, account?: string): Promise<ToolPayload> {
     const query = new URLSearchParams({ q: keyword, mailbox, limit: String(limit) })
+    if (account !== undefined) query.set('account', account)
     return request<ToolPayload>('/api/dsh-qqmail/search?' + query.toString())
   }
 
   /** Read one message. */
-  async read(uid: number, mailbox: string): Promise<ToolPayload> {
+  async read(uid: number, mailbox: string, account?: string): Promise<ToolPayload> {
     const query = new URLSearchParams({ uid: String(uid), mailbox, maxBodyChars: '20000' })
+    if (account !== undefined) query.set('account', account)
     return request<ToolPayload>('/api/dsh-qqmail/read?' + query.toString())
   }
 
   /** Set flags on one message. */
-  async mark(payload: { uid: number; mailbox: string; seen?: boolean; flagged?: boolean }): Promise<{ ok: boolean; message: string }> {
+  async mark(payload: { account?: string; uid: number; mailbox: string; seen?: boolean; flagged?: boolean }): Promise<{ ok: boolean; message: string }> {
     return request('/api/dsh-qqmail/mark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -236,6 +267,7 @@ export class QqmailApi {
 
   /** Send a message. */
   async send(payload: {
+    account?: string
     to: string[]
     cc?: string[]
     subject: string

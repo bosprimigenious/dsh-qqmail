@@ -17,6 +17,9 @@ import {
   addressLabel,
   formatDate,
   formatSize,
+  type AccountView,
+  type AccountsView,
+  type ConfigView,
   type MailboxInfo,
   type MessageDetail,
   type MessageSummary,
@@ -44,7 +47,7 @@ const s: Record<string, React.CSSProperties> = {
     color: 'inherit',
     boxSizing: 'border-box',
   },
-  head: { display: 'flex', alignItems: 'center', gap: '8px' },
+  head: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
   dot: { width: 8, height: 8, borderRadius: '50%', flex: 'none', background: '#c9cdd4' },
   title: { fontWeight: 600, fontSize: '13px', margin: 0, flex: 1 },
   badge: {
@@ -210,6 +213,18 @@ function Icon({ kind }: { kind: 'refresh' | 'mail' | 'check' | 'send' }): React.
   )
 }
 
+interface AccountDraft {
+  preset: string; email: string; authCode: string; authHint: string; credentialHint: string
+  fromName: string; signature: string; sentFolder: string; downloadDir: string; previewInList: boolean
+  saveSent: boolean; configPath: string
+}
+function draftFrom(view?: ConfigView): AccountDraft {
+  return { preset: view?.preset ?? 'qq', email: view?.email ?? '', authCode: '',
+    authHint: view?.authCodeHint ?? '', credentialHint: view?.credentialHint ?? '',
+    fromName: view?.fromName ?? '', signature: view?.signature ?? '', sentFolder: view?.sentFolder ?? '', downloadDir: view?.downloadDir ?? '',
+    previewInList: view?.previewInList ?? false, saveSent: view?.saveSent ?? true, configPath: view?.configPath ?? '' }
+}
+
 /** Panel props (the settings slot renders it with no props). */
 export interface QqmailPanelProps {
   variant?: string
@@ -219,27 +234,44 @@ export interface QqmailPanelProps {
 /** The settings-page section. */
 export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
   const [ready, setReady] = useState(false)
-  const [configured, setConfigured] = useState(false)
   const [readOnly, setReadOnly] = useState(true)
   const [presets, setPresets] = useState<PresetInfo[]>([])
   const [probeText, setProbeText] = useState('')
   const [probeOk, setProbeOk] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusyState] = useState(false)
+  const pending = useRef(0)
+  const setBusy = useCallback((starting: boolean): void => {
+    pending.current = Math.max(0, pending.current + (starting ? 1 : -1))
+    setBusyState(pending.current > 0)
+  }, [])
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
 
-  // Draft config fields (only non-empty drafts are submitted).
-  const [preset, setPreset] = useState('qq')
-  const [email, setEmail] = useState('')
-  const [authCode, setAuthCode] = useState('')
-  const [authHint, setAuthHint] = useState('')
-  const [credentialHint, setCredentialHint] = useState('')
-  const [fromName, setFromName] = useState('')
-  const [signature, setSignature] = useState('')
-  const [downloadDir, setDownloadDir] = useState('')
-  const [previewInList, setPreviewInList] = useState(false)
-  const [saveSent, setSaveSent] = useState(true)
-  const [configPath, setConfigPath] = useState('')
+  const [accounts, setAccounts] = useState<AccountView[]>([])
+  const [resolvedDefaultId, setResolvedDefaultId] = useState('')
+  const [listWarning, setListWarning] = useState('')
+  const [selectedId, setSelectedId] = useState('')
+  const [newId, setNewId] = useState('')
+  const [removeTarget, setRemoveTarget] = useState('')
+  const selectedRef = useRef('')
+  const selectionEpoch = useRef(0)
+  const [drafts, setDrafts] = useState<Record<string, AccountDraft>>({})
+  const draft = drafts[selectedId] ?? draftFrom()
+  const { preset, email, authCode, authHint, credentialHint, fromName, signature, sentFolder, downloadDir, previewInList, saveSent, configPath } = draft
+  const configured = accounts.find((a) => a.id === selectedId)?.configured ?? false
+  const setField = <K extends keyof AccountDraft>(key: K, value: AccountDraft[K]): void => {
+    setDrafts((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? draftFrom()), [key]: value } }))
+  }
+  const setPreset = (value: string): void => setField('preset', value)
+  const setEmail = (value: string): void => setField('email', value)
+  const setAuthCode = (value: string): void => setField('authCode', value)
+  const setCredentialHint = (value: string): void => setField('credentialHint', value)
+  const setFromName = (value: string): void => setField('fromName', value)
+  const setSignature = (value: string): void => setField('signature', value)
+  const setSentFolder = (value: string): void => setField('sentFolder', value)
+  const setDownloadDir = (value: string): void => setField('downloadDir', value)
+  const setPreviewInList = (value: boolean): void => setField('previewInList', value)
+  const setSaveSent = (value: boolean): void => setField('saveSent', value)
 
   // Inbox state.
   const [mailboxes, setMailboxes] = useState<MailboxInfo[]>([])
@@ -256,53 +288,68 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
   const [sendText, setSendText] = useState('')
 
   const bootstrapped = useRef(false)
+  const selectAccount = useCallback((id: string): void => {
+    selectedRef.current = id
+    selectionEpoch.current += 1
+    setSelectedId(id)
+    setRemoveTarget('')
+    setMailboxes([]); setMailbox('INBOX'); setUnseenOnly(false); setItems([]); setDetail(null); setListNote('')
+    setProbeText(''); setProbeOk(false); setError(''); setMessage('')
+    // A compose draft must never silently change its sending identity.
+    setComposeOpen(false); setSendTo(''); setSendSubject(''); setSendText('')
+  }, [])
 
-  /** Load status and refresh the drafts. */
-  const loadStatus = useCallback(async (probe = false): Promise<void> => {
+  const applyAccounts = useCallback((data: AccountsView, preferredId?: string): void => {
+    setAccounts(data.accounts); setResolvedDefaultId(data.resolvedDefaultAccount); setListWarning(data.warning)
+    setDrafts((current) => {
+      const next: Record<string, AccountDraft> = {}
+      // Keep the unsaved creation form, while discarding deleted account secrets.
+      if (current.__new__) next.__new__ = current.__new__
+      for (const account of data.accounts) next[account.id] = current[account.id] ?? draftFrom(account)
+      return next
+    })
+    const desired = preferredId ?? selectedRef.current
+    if (data.accounts.some((a) => a.id === desired)) {
+      if (desired !== selectedRef.current) selectAccount(desired)
+    } else selectAccount(data.resolvedDefaultAccount || '__new__')
+  }, [selectAccount])
+
+  const loadAccounts = useCallback(async (preferredId?: string): Promise<void> => {
+    const response = await api.accounts()
+    if (!response.ok) throw new Error(response.message)
+    applyAccounts(response.data, preferredId)
+  }, [applyAccounts])
+
+  const loadAccountView = useCallback(async (id: string): Promise<void> => {
+    const epoch = selectionEpoch.current
+    setBusy(true)
     try {
-      const response = probe ? await api.probe() : await api.status()
-      const status = probe ? await api.status() : response
-      const view = (status as { data?: Record<string, unknown> }).data
-      if (view === undefined) return
-      setConfigured(view.configured === true)
-      setReadOnly(view.readOnly === true)
-      setPresets((status as { presets?: PresetInfo[] }).presets ?? [])
-      setPreset(typeof view.preset === 'string' ? view.preset : 'qq')
-      setEmail(typeof view.email === 'string' ? view.email : '')
-      setAuthHint(typeof view.authCodeHint === 'string' ? view.authCodeHint : '')
-      setCredentialHint(typeof view.credentialHint === 'string' ? view.credentialHint : '')
-      setFromName(typeof view.fromName === 'string' ? view.fromName : '')
-      setSignature(typeof view.signature === 'string' ? view.signature : '')
-      setDownloadDir(typeof view.downloadDir === 'string' ? view.downloadDir : '')
-      setPreviewInList(view.previewInList === true)
-      setSaveSent(view.saveSent !== false)
-      setConfigPath(typeof view.configPath === 'string' ? view.configPath : '')
+      const response = await api.status(false, id === '__new__' ? undefined : id)
+      if (epoch !== selectionEpoch.current) return
+      if (!response.ok) throw new Error(response.message)
+      const view = response.data
+      const actualId = view.account?.id ?? id
+      if (actualId !== id && id !== '__new__') throw new Error('账号身份不匹配，请刷新账号列表。')
+      setPresets(response.presets); setReadOnly(response.readOnly)
+      setDrafts((current) => ({ ...current, [id]: current[id] ?? draftFrom(id === '__new__' ? undefined : view) }))
       setReady(true)
-      if (probe) {
-        const result = (status as { data?: { probe?: Record<string, unknown> } }).data?.probe
-        if (result !== undefined) {
-          setProbeOk(result.ok === true)
-          setProbeText(
-            'IMAP ' +
-              (result.imapOk === true ? '通过' + (result.mailboxCount !== undefined ? '（' + String(result.mailboxCount) + ' 个文件夹）' : '') : '失败：' + String(result.imapError ?? '')) +
-              '　SMTP ' +
-              (result.smtpOk === true ? '通过' : '失败：' + String(result.smtpError ?? '')),
-          )
-        }
-      }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      if (epoch === selectionEpoch.current) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
     }
   }, [])
 
   useEffect(() => {
     if (bootstrapped.current) return
     bootstrapped.current = true
-    void loadStatus(false)
-  }, [loadStatus])
+    void loadAccounts().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
+  }, [loadAccounts])
+  useEffect(() => { if (selectedId) void loadAccountView(selectedId) }, [selectedId, loadAccountView])
 
   /** Persist the configuration drafts. */
   const save = useCallback(async (): Promise<void> => {
+    const epoch = selectionEpoch.current
     setBusy(true)
     setError('')
     setMessage('')
@@ -312,102 +359,173 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
         email,
         fromName,
         signature,
+        sentFolder,
         downloadDir,
-        readOnly,
         previewInList,
         saveSent,
       }
       // An empty box means "leave the stored code alone" — the host never sends
       // the secret back to the browser, so the field always starts empty.
       if (authCode.trim() !== '') patch.authCode = authCode.trim()
-      const response = await api.setConfig(patch)
-      setAuthCode('')
-      setMessage(response.ok ? '配置已保存。' : response.message)
-      await loadStatus(false)
+      const id = selectedId
+      const creating = id === '__new__'
+      if (creating && (!email.trim() || !authCode.trim())) throw new Error('新增账号必须填写邮箱地址和授权码。')
+      if (creating && newId.trim()) patch.id = newId.trim()
+      const response = creating
+        ? await api.accountsAction({ ...patch, action: 'add' })
+        : await api.setConfig(patch, id)
+      if (epoch !== selectionEpoch.current) return
+      if (!response.ok) throw new Error(response.message)
+      setDrafts((current) => ({ ...current, [id]: { ...current[id]!, authCode: current[id]?.authCode === authCode ? '' : current[id]?.authCode ?? '', authHint: response.data?.authCodeHint ?? current[id]?.authHint ?? '', credentialHint: response.data?.credentialHint ?? current[id]?.credentialHint ?? '', configPath: response.data?.configPath ?? current[id]?.configPath ?? '' } }))
+      if (creating) {
+        // Add returns ConfigView, not AccountsView. Refresh to resolve an auto-derived id.
+        const refreshed = await api.accounts()
+        if (epoch !== selectionEpoch.current) return
+        if (!refreshed.ok) throw new Error(refreshed.message)
+        const createdId = response.data?.account?.id ?? refreshed.data.accounts.find((account) => account.email.toLowerCase() === email.trim().toLowerCase())?.id
+        if (!createdId) throw new Error('账号已创建，请刷新账号列表。')
+        setDrafts((current) => { const next = { ...current }; delete next.__new__; return next })
+        setNewId('')
+        applyAccounts(refreshed.data, createdId)
+        setMessage('账号已创建。')
+      } else {
+        await loadAccounts()
+        if (epoch === selectionEpoch.current) setMessage('配置已保存。')
+      }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      if (epoch === selectionEpoch.current) setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }
-  }, [authCode, downloadDir, email, fromName, loadStatus, preset, previewInList, readOnly, saveSent, signature])
+  }, [authCode, downloadDir, email, fromName, loadAccounts, applyAccounts, newId, selectedId, preset, previewInList, saveSent, signature, sentFolder])
+
+  const manageAccount = async (action: 'setDefault' | 'remove'): Promise<void> => {
+    const id = selectedId
+    const epoch = selectionEpoch.current
+    if (id === '__new__' || !id || (action === 'remove' && removeTarget !== id)) return
+    setBusy(true); setError(''); setMessage('')
+    try {
+      const response = await api.accountsAction({ action, account: id, ...(action === 'remove' ? { confirm: true } : {}) })
+      if (epoch !== selectionEpoch.current) return
+      if (!response.ok) throw new Error(response.message)
+      applyAccounts(response.data)
+      setRemoveTarget('')
+      setMessage(action === 'remove' ? '账号已删除，本地邮件文件未删除。' : '默认账号已更新。')
+    } catch (cause) {
+      if (epoch === selectionEpoch.current) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally { setBusy(false) }
+  }
 
   /** Run the real connect check. */
   const runProbe = useCallback(async (): Promise<void> => {
+    const epoch = selectionEpoch.current
     setBusy(true)
     setError('')
     setProbeText('')
     try {
-      await loadStatus(true)
+      const response = await api.probe(selectedId)
+      if (epoch !== selectionEpoch.current) return
+      if (!response.ok) throw new Error(response.message)
+      const result = response.data?.probe
+      setProbeOk(result?.ok === true)
+      setProbeText(result ? 'IMAP ' + (result.imapOk ? '通过' : '失败：' + result.imapError) + '；SMTP ' + (result.smtpOk ? '通过' : '失败：' + result.smtpError) : response.message)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      if (epoch === selectionEpoch.current) setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }
-  }, [loadStatus])
+  }, [selectedId])
+
+  const saveReadOnly = async (next: boolean): Promise<void> => {
+    setBusy(true); setError('')
+    try {
+      const response = await api.setConfig({ readOnly: next })
+      if (!response.ok) throw new Error(response.message)
+      setReadOnly(next); setMessage('插件设置已保存，重启 dsh web 后工具注册生效。')
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setBusy(false) }
+  }
 
   /** Load folders and the current page of messages. */
   const loadInbox = useCallback(
     async (targetMailbox = mailbox, unseen = unseenOnly): Promise<void> => {
+      const epoch = selectionEpoch.current
       setBusy(true)
       setError('')
       setDetail(null)
       try {
-        const folders = await api.folders()
+        const folders = await api.folders(selectedId)
+        if (epoch !== selectionEpoch.current) return
+        if (!folders.ok) throw new Error(folders.message)
         const list = (folders.data?.mailboxes ?? []) as MailboxInfo[]
         setMailboxes(list)
         const chosen = list.some((entry) => entry.path === targetMailbox) ? targetMailbox : list[0]?.path ?? 'INBOX'
         setMailbox(chosen)
-        const payload: ToolPayload = await api.list({ mailbox: chosen, limit: 25, unseen })
+        const payload: ToolPayload = await api.list({ mailbox: chosen, limit: 25, unseen, account: selectedId })
+        if (epoch !== selectionEpoch.current) return
         setItems((payload.data?.items ?? []) as MessageSummary[])
         setListNote(payload.ok ? '' : payload.message)
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause))
+        if (epoch === selectionEpoch.current) setError(cause instanceof Error ? cause.message : String(cause))
       } finally {
         setBusy(false)
       }
     },
-    [mailbox, unseenOnly],
+    [mailbox, unseenOnly, selectedId],
   )
+
+  const lastInboxAccount = useRef('')
+  useEffect(() => {
+    const previous = lastInboxAccount.current
+    lastInboxAccount.current = selectedId
+    // Preserve the legacy single-account first-open path (explicit refresh).
+    if (configured && (accounts.length > 1 || (previous && previous !== '__new__' && previous !== selectedId))) void loadInbox('INBOX', false)
+  }, [selectedId, configured, accounts.length])
 
   /** Open one message. */
   const openMessage = useCallback(
     async (uid: number): Promise<void> => {
+      const epoch = selectionEpoch.current
       setBusy(true)
       setError('')
       try {
-        const payload = await api.read(uid, mailbox)
+        const payload = await api.read(uid, mailbox, selectedId)
+      if (epoch !== selectionEpoch.current) return
         const first = (payload.data?.items ?? [])[0] as MessageDetail | undefined
         if (first !== undefined) setDetail(first)
         else setError(payload.message)
         setItems((current) => current.map((entry) => (entry.uid === uid ? { ...entry, seen: true } : entry)))
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause))
+        if (epoch === selectionEpoch.current) setError(cause instanceof Error ? cause.message : String(cause))
       } finally {
         setBusy(false)
       }
     },
-    [mailbox],
+    [mailbox, selectedId],
   )
 
   /** Toggle one flag. */
   const toggleFlag = useCallback(
     async (uid: number, flagged: boolean): Promise<void> => {
+      const epoch = selectionEpoch.current
       setBusy(true)
       try {
-        const response = await api.mark({ uid, mailbox, flagged })
+        const response = await api.mark({ uid, mailbox, flagged, account: selectedId })
+      if (epoch !== selectionEpoch.current) return
         setMessage(response.message)
         setItems((current) => current.map((entry) => (entry.uid === uid ? { ...entry, flagged } : entry)))
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause))
+        if (epoch === selectionEpoch.current) setError(cause instanceof Error ? cause.message : String(cause))
       } finally {
         setBusy(false)
       }
     },
-    [mailbox],
+    [mailbox, selectedId],
   )
 
   /** Send the composed message. */
   const send = useCallback(async (): Promise<void> => {
+    const epoch = selectionEpoch.current
     setBusy(true)
     setError('')
     setMessage('')
@@ -417,7 +535,8 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
         .map((entry) => entry.trim())
         .filter((entry) => entry !== '')
       if (recipients.length === 0) throw new Error('请填写收件人。')
-      const response = await api.send({ to: recipients, subject: sendSubject, text: sendText })
+      const response = await api.send({ to: recipients, subject: sendSubject, text: sendText, account: selectedId })
+      if (epoch !== selectionEpoch.current) return
       setMessage(response.message)
       if (response.ok) {
         setSendTo('')
@@ -425,11 +544,11 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
         setSendText('')
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      if (epoch === selectionEpoch.current) setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }
-  }, [sendSubject, sendText, sendTo])
+  }, [sendSubject, sendText, sendTo, selectedId])
 
   const statusColor = !configured ? '#c9cdd4' : probeText === '' ? '#f0a020' : probeOk ? '#1f9254' : '#d03050'
   const statusLabel = !configured ? '未配置' : probeText === '' ? '已配置（未自检）' : probeOk ? '连接正常' : '连接异常'
@@ -460,8 +579,26 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
       {message !== '' ? <p style={s.ok}>{message}</p> : null}
       {probeText !== '' ? <p style={probeOk ? s.ok : s.bad}>{probeText}</p> : null}
 
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px' }}>
+        {accounts.length > 1 ? <aside aria-label="邮箱账号" style={{ flex: '0 0 150px', minWidth: 0 }}>
+          <p style={s.sectionTitle}>账号</p>
+          {listWarning ? <p role="status" style={{ ...s.hint, color: '#b7791f' }}>{listWarning}</p> : null}
+          {accounts.map((account) => (
+            <button key={account.id} type="button" disabled={busy} aria-pressed={selectedId === account.id}
+              onClick={() => selectAccount(account.id)}
+              style={{ ...s.item, display: 'block', overflowWrap: 'anywhere', background: selectedId === account.id ? 'rgba(30,128,255,0.12)' : 'transparent' }}>
+              {account.label || account.email || account.id}
+              {account.id === resolvedDefaultId ? <span style={s.badge}>默认</span> : null}
+            </button>
+          ))}
+          <button type="button" style={{ ...s.button, marginTop: 8 }} disabled={busy} onClick={() => selectAccount('__new__')}>新增账号</button>
+        </aside> : null}
+        {accounts.length <= 1 ? <div style={{ width: '100%' }}><button type="button" style={s.button} disabled={busy || selectedId === '__new__'} onClick={() => selectAccount('__new__')}>新增账号</button>{accounts.length === 1 && selectedId === '__new__' ? <button type="button" style={{ ...s.button, marginLeft: 8 }} disabled={busy} onClick={() => selectAccount(accounts[0]!.id)}>返回已绑定账号</button> : null}</div> : null}
+        {accounts.length <= 1 && listWarning ? <p role="status" style={{ ...s.hint, color: '#b7791f' }}>{listWarning}</p> : null}
+        <fieldset disabled={busy} style={{ flex: '1 1 300px', minWidth: 0, border: 0, margin: 0, padding: 0 }}>
       <div style={s.section}>
-        <p style={s.sectionTitle}>账户</p>
+        <p style={s.sectionTitle}>账户{selectedId && selectedId !== '__new__' ? '：' + selectedId : '：首次绑定'}</p>
+        {selectedId === '__new__' ? <div style={s.row}><span style={s.label}>账号 ID（可选）</span><input style={s.input} value={newId} placeholder="留空则从邮箱地址自动生成" spellCheck={false} onChange={(event) => setNewId(event.target.value)} /></div> : null}
         <div style={s.row}>
           <span style={s.label}>服务商</span>
           <select
@@ -511,11 +648,11 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
         </div>
         <div style={s.row}>
           <span style={s.label}>签名</span>
-          <input style={s.input} value={signature} placeholder="自动附加在发出的邮件末尾" onChange={(event) => setSignature(event.target.value)} />
+          <textarea style={{ ...s.textarea, minHeight: 64, flex: 1, width: 'auto', minWidth: 140 }} value={signature} placeholder="自动附加在发出的邮件末尾" onChange={(event) => setSignature(event.target.value)} />
         </div>
         <div style={s.row}>
-          <button style={s.primary} type="button" disabled={busy} onClick={() => void save()}>
-            保存配置
+          <button style={s.primary} type="button" disabled={busy || !selectedId || (selectedId === '__new__' && (!email.trim() || !authCode.trim()))} onClick={() => void save()}>
+            {selectedId === '__new__' ? '创建账号' : '保存配置'}
           </button>
           <button style={s.button} type="button" disabled={busy || !configured} onClick={() => void runProbe()}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
@@ -524,16 +661,20 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
             </span>
           </button>
         </div>
+        {selectedId === '__new__' ? <p style={s.hint}>邮箱地址和授权码均为必填；其他账号的未保存草稿会保留。</p> : <div style={s.row}>
+          <button type="button" style={s.button} disabled={busy || selectedId === resolvedDefaultId} onClick={() => void manageAccount('setDefault')}>{selectedId === resolvedDefaultId ? '当前默认账号' : '设为默认'}</button>
+          <button type="button" style={s.button} disabled={busy} onClick={() => setRemoveTarget(selectedId)}>删除账号</button>
+        </div>}
+        {removeTarget === selectedId && selectedId !== '__new__' ? <div role="alert" style={{ ...s.section, borderColor: '#d03050' }}>
+          <p style={s.bad}>确定移除 {accounts.find((account) => account.id === selectedId)?.email || selectedId}？将移除该账号配置和授权码，其他账号不受影响。</p>
+          <div style={s.row}><button type="button" style={{ ...s.button, color: '#d03050' }} disabled={busy} onClick={() => void manageAccount('remove')}>确认删除账号</button><button type="button" style={s.button} disabled={busy} onClick={() => setRemoveTarget('')}>取消</button></div>
+        </div> : null}
         {credentialHint !== '' ? <p style={s.hint}>{credentialHint}</p> : null}
         {configPath !== '' ? <p style={s.hint}>配置文件：{configPath}（权限 0600，含授权码）</p> : null}
       </div>
 
       <div style={s.section}>
-        <p style={s.sectionTitle}>行为</p>
-        <label style={s.check}>
-          <input type="checkbox" checked={readOnly} onChange={(event) => setReadOnly(event.target.checked)} />
-          只读模式（不向 agent 注册发送 / 标记 / 移动 / 删除工具）
-        </label>
+        <p style={s.sectionTitle}>当前账号行为</p>
         <label style={s.check}>
           <input type="checkbox" checked={saveSent} onChange={(event) => setSaveSent(event.target.checked)} />
           发送后存一份到「已发送」
@@ -543,23 +684,37 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
           列表附带正文预览（稍慢）
         </label>
         <div style={s.row}>
+          <span style={s.label}>已发送文件夹</span>
+          <input style={s.input} value={sentFolder} placeholder="留空则自动探测" spellCheck={false} onChange={(event) => setSentFolder(event.target.value)} />
+        </div>
+        <div style={s.row}>
           <span style={s.label}>附件目录</span>
           <input
             style={s.input}
             value={downloadDir}
-            placeholder="留空则存到 DSH_HOME/dsh-qqmail/attachments"
+            placeholder={accounts.length > 1 ? '留空则按账号存到 attachments/' + selectedId : '留空则存到 DSH_HOME/dsh-qqmail/attachments'}
             spellCheck={false}
             onChange={(event) => setDownloadDir(event.target.value)}
           />
         </div>
       </div>
 
+        </fieldset>
+      </div>
+      <div style={s.section}>
+        <p style={s.sectionTitle}>插件级设置（对所有账号生效）</p>
+        <label style={s.check}>
+          <input type="checkbox" disabled={busy} checked={readOnly} onChange={(event) => void saveReadOnly(event.target.checked)} />
+          只读模式（重启 dsh web 后工具注册生效）
+        </label>
+      </div>
       <div style={s.section}>
         <p style={s.sectionTitle}>收件箱速览</p>
         <div style={s.row}>
           <select
             style={{ ...s.select, flex: 'none', minWidth: '180px' }}
             value={mailbox}
+            disabled={busy}
             onChange={(event) => {
               setMailbox(event.target.value)
               void loadInbox(event.target.value, unseenOnly)
@@ -578,6 +733,7 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
             <input
               type="checkbox"
               checked={unseenOnly}
+              disabled={busy}
               onChange={(event) => {
                 setUnseenOnly(event.target.checked)
                 void loadInbox(mailbox, event.target.checked)
@@ -600,7 +756,7 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
                 key={entry.uid}
                 type="button"
                 style={s.item}
-                onClick={() => void openMessage(entry.uid)}
+                disabled={busy} onClick={() => void openMessage(entry.uid)}
                 title={entry.subject}
               >
                 <span style={entry.seen ? s.read : s.unread} />
@@ -626,7 +782,7 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
               <button
                 type="button"
                 style={{ ...s.button, marginLeft: '8px', padding: '2px 8px' }}
-                onClick={() => void toggleFlag(detail.uid, !detail.flagged)}
+                disabled={busy} onClick={() => void toggleFlag(detail.uid, !detail.flagged)}
               >
                 {detail.flagged ? '取消星标' : '加星标'}
               </button>
@@ -648,8 +804,8 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
 
       <div style={s.section}>
         <p style={s.sectionTitle}>
-          写邮件
-          <button type="button" style={{ ...s.button, marginLeft: '8px', padding: '2px 8px' }} onClick={() => setComposeOpen((value) => !value)}>
+          写邮件{selectedId !== '__new__' ? '：' + (accounts.find((account) => account.id === selectedId)?.email || selectedId) : ''}
+          <button type="button" disabled={busy || !configured} style={{ ...s.button, marginLeft: '8px', padding: '2px 8px' }} onClick={() => setComposeOpen((value) => !value)}>
             {composeOpen ? '收起' : '展开'}
           </button>
           {readOnly ? <span style={{ ...s.hint, marginLeft: '8px' }}>当前只读——面板仍可发送，agent 工具需关闭只读模式</span> : null}
@@ -658,13 +814,13 @@ export function QqmailPanel(_props: QqmailPanelProps): React.ReactElement {
           <>
             <div style={s.row}>
               <span style={s.label}>收件人</span>
-              <input style={s.input} value={sendTo} placeholder="a@b.com, c@d.com" spellCheck={false} onChange={(event) => setSendTo(event.target.value)} />
+              <input style={s.input} disabled={busy} value={sendTo} placeholder="a@b.com, c@d.com" spellCheck={false} onChange={(event) => setSendTo(event.target.value)} />
             </div>
             <div style={s.row}>
               <span style={s.label}>主题</span>
-              <input style={s.input} value={sendSubject} onChange={(event) => setSendSubject(event.target.value)} />
+              <input style={s.input} disabled={busy} value={sendSubject} onChange={(event) => setSendSubject(event.target.value)} />
             </div>
-            <textarea style={s.textarea} value={sendText} placeholder="正文（会自动附加签名）" onChange={(event) => setSendText(event.target.value)} />
+            <textarea style={s.textarea} disabled={busy} value={sendText} placeholder="正文（会自动附加签名）" onChange={(event) => setSendText(event.target.value)} />
             <div style={s.row}>
               <button style={s.primary} type="button" disabled={busy || !configured} onClick={() => void send()}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
