@@ -152,3 +152,12 @@ pnpm run verify         # 可移植性门禁（隔离 DSH_HOME + 真实安装）
 ## 许可
 
 MIT
+
+
+## 多账号开发版
+
+可通过 qqmail_config 的 account:"__new__" 或 qqmail_accounts action:"add" 新增账号；email/authCode 配合可选 id、label、preset。省略 account 修改默认账号，不会自动新增。已有工具全部接受账号 id 或邮箱引用；未知引用报错，uid 只在账号+文件夹内唯一。qqmail_accounts 可列出、设默认、确认删除。CLI 支持 --account；MCP 使用同一套规格。
+
+BUPT 等腾讯企业邮箱域名请显式选择 preset:"qq-exmail"，不自动推测企业域名。签名、saveSent、previewInList、附件目录均为账号级，readOnly 为插件级。多账号默认附件按 id 分子目录；单账号保留旧路径。
+
+当前多账号 UI 和真实双邮箱验收尚未完成；先在隔离开发 profile 使用，暂不替换正在使用的 desktop。实现与验收说明见 docs/multi-account-core.md。

@@ -297,8 +297,8 @@ console.log('\n▸ 工具名册随 readOnly 变化')
   check('只读模式无写工具', !readOnlyNames.some((name) => ['qqmail_send', 'qqmail_reply', 'qqmail_mark', 'qqmail_move', 'qqmail_delete'].includes(name)))
   check('只读模式含核心读工具', ['qqmail_status', 'qqmail_config', 'qqmail_list', 'qqmail_search', 'qqmail_read', 'qqmail_attachment', 'qqmail_folders'].every((name) => readOnlyNames.includes(name)))
   check('读写模式含全部写工具', ['qqmail_send', 'qqmail_reply', 'qqmail_mark', 'qqmail_move', 'qqmail_delete'].every((name) => writeNames.includes(name)))
-  check('读写模式共 12 个工具', writeNames.length === 12, String(writeNames.length))
-  check('只读模式共 7 个工具', readOnlyNames.length === 7, String(readOnlyNames.length))
+  check('读写模式共 13 个工具', writeNames.length === 13, String(writeNames.length))
+  check('只读模式共 8 个工具', readOnlyNames.length === 8, String(readOnlyNames.length))
   check('工具名唯一', new Set(writeNames).size === writeNames.length)
 }
 
@@ -313,7 +313,7 @@ console.log('\n▸ 每个工具的描述与参数都可转 schema')
       if (typeof node.type !== 'string') bad = spec.name + '.' + key + ' 缺 type'
     }
   }
-  check('全部 12 个工具通过', bad === '', bad)
+  check('全部 13 个工具通过', bad === '', bad)
   const send = buildSpecs(false).find((spec) => spec.name === 'qqmail_send')
   check('qqmail_send.to 是必填', toJsonSchema(send.parameters).required.includes('to'))
 }

@@ -228,12 +228,13 @@ function empty(): MailConfig {
 }
 
 function validId(id: string): boolean {
-  return /^[a-z0-9._-]{1,64}$/.test(id) && id !== '__new__'
+  return /^[a-z0-9._-]{1,64}$/.test(id) && !['__new__', '.', '..'].includes(id)
 }
 
 function deriveId(email: string, used: Set<string>): string {
-  const stem = email.split('@')[0]!.toLowerCase().replace(/[^a-z0-9._-]/g, '-').slice(0, 64) || 'account'
-  let id = stem === '__new__' ? 'account' : stem
+  const candidate = email.split('@')[0]!.toLowerCase().replace(/[^a-z0-9._-]/g, '-').slice(0, 64) || 'account'
+  const stem = ['__new__', '.', '..'].includes(candidate) ? 'account' : candidate
+  let id = stem
   for (let n = 2; used.has(id); n += 1) {
     const suffix = '-' + String(n)
     id = stem.slice(0, 64 - suffix.length) + suffix
@@ -294,7 +295,7 @@ export function resolveAccountRef(config: MailConfig, ref?: string): AccountReso
   return {
     config: selected, error: '',
     warning: config.defaultAccount !== '' && selected?.id !== config.defaultAccount
-      ? '配置的默认账号不存在，已回落到 ' + (selected?.id ?? '(无账号)') : '',
+      ? '配置的默认账号不存在，已回落到 ' + (selected ? selected.id + ' (' + selected.email.trim() + ')' : '(无账号)') : '',
   }
 }
 

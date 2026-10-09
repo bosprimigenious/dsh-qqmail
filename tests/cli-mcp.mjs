@@ -215,7 +215,7 @@ try {
     sendRpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
     const list = await waitFor((entry) => entry.id === 2)
     const tools = list?.result?.tools ?? []
-    check('列出 12 个工具（--allow-write）', tools.length === 12, String(tools.length))
+    check('列出 13 个工具（--allow-write）', tools.length === 13, String(tools.length))
     check('工具名带 qqmail_ 前缀', tools.every((tool) => tool.name.startsWith('qqmail_')))
     check('每个工具有描述', tools.every((tool) => typeof tool.description === 'string' && tool.description.length > 20))
     const sendTool = tools.find((tool) => tool.name === 'qqmail_send')

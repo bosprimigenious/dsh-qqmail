@@ -41,7 +41,7 @@ export function attachmentsDir(): string {
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
 export const QQMAIL_GUIDANCE =
   '本机已安装 dsh-qqmail 插件（QQ 邮箱 / 通用 IMAP·SMTP 邮箱连接）：把邮箱收发能力做成 qqmail_* 工具——' +
-  'qqmail_status（配置与连接自检，probe=true 会真实连一次）、qqmail_config（配置邮箱，见下）、' +
+  'qqmail_accounts（账号管理，新增/删除/设默认）、qqmail_status（配置与连接自检，probe=true 会真实连一次）、qqmail_config（配置邮箱，见下）、' +
   'qqmail_folders（列文件夹）、qqmail_list（列邮件，默认收件箱最新在前）、qqmail_search（按发件人/主题/正文/日期/未读/星标搜索）、' +
   'qqmail_read（读邮件全文，支持 uids 批量一次读多封）、qqmail_attachment（下载附件）。' +
   '写工具（仅当 readOnly=false 时注册）：qqmail_send（发信）、qqmail_reply（回复，自动带 Re:/In-Reply-To/引用原文）、' +
@@ -50,7 +50,7 @@ export const QQMAIL_GUIDANCE =
   '用 qqmail_config 传 email + authCode（首次使用应先 qqmail_status 看是否已配置）；' +
   '② 默认 readOnly=true，只注册读取类工具，需要发信时先 qqmail_config 设 readOnly=false；' +
   '③ 中文关键词搜索（主题/正文）走**本地窗口过滤**（只扫最近约 400 封，结果标 mode=local），英文/数字走服务器端精确搜索；' +
-  '④ 邮件 uid 只在其所在文件夹内有效，跨文件夹需同时带 mailbox；' +
+  '④ account 可传账号 id 或邮箱，省略用默认；新增用 qqmail_config account:__new__。uid 只在账号+文件夹内有效，跨账号需同时带 account 和 mailbox；' +
   '⑤ 附件默认下载到 DSH_HOME 下的 dsh-qqmail/attachments（可用 qqmail_config 的 downloadDir 改）。' +
   '用户提到「QQ 邮箱 / 邮箱 / 邮件 / 收发邮件 / agent email / 附件」时即指本插件，请据此协作。'
 
@@ -225,7 +225,7 @@ export {
 } from './core/mime.ts'
 export { toJsonSchema, type JsonSchemaObject, type ParamSpec } from './core/schema.ts'
 export { QQMAIL_API, makeRoutes, type RouteContext } from './routes.ts'
-export { WRITE_TOOL_NAMES, buildSpecs, qqmailConfigSpec, qqmailStatusSpec, type SpecContext, type SpecResult, type ToolSpec } from './specs.ts'
+export { WRITE_TOOL_NAMES, buildSpecs, qqmailAccountsSpec, qqmailConfigSpec, qqmailStatusSpec, type SpecContext, type SpecResult, type ToolSpec } from './specs.ts'
 export { buildTools, jsonSafe } from './tools.ts'
 export type {
   Account,

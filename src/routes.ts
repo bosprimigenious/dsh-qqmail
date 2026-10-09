@@ -18,6 +18,7 @@ import type { MailStore } from './store.ts'
 
 /** Route paths. */
 export const QQMAIL_API = {
+  accounts: '/api/dsh-qqmail/accounts',
   status: '/api/dsh-qqmail/status',
   config: '/api/dsh-qqmail/config',
   probe: '/api/dsh-qqmail/probe',
@@ -90,6 +91,7 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
 function queryArgs(params: URLSearchParams): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of params.entries()) {
+    if (key === 'account') { out.account = value; continue }
     if (key === 'uids') {
       out.uids = value
         .split(',')
@@ -159,12 +161,25 @@ export function makeRoutes(deps: RouteContext) {
 
   return [
     {
+      kind: 'exact' as const, path: QQMAIL_API.accounts,
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: 'forbidden: loopback-only' }); return }
+        if (req.method === 'GET') { writeJson(res, 200, await run('qqmail_accounts', {})); return }
+        if (req.method === 'POST') {
+          const body = await readJsonBody(req)
+          if (!body) { writeJson(res, 400, { error: 'invalid JSON body' }); return }
+          writeJson(res, 200, await run('qqmail_accounts', body)); return
+        }
+        writeJson(res, 405, { error: 'method not allowed' })
+      },
+    },
+    {
       kind: 'exact' as const,
       path: QQMAIL_API.status,
       handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (!guard(req, res, 'GET')) return
         const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams
-        const result = await run('qqmail_status', { probe: params.get('probe') === '1' })
+        const result = await run('qqmail_status', { probe: params.get('probe') === '1', ...(params.has('account') ? { account: params.get('account')! } : {}) })
         // The panel needs the preset catalogue to render its provider picker;
         // the agent gets it from the tool description instead.
         writeJson(res, 200, {
@@ -190,7 +205,8 @@ export function makeRoutes(deps: RouteContext) {
         }
         const method = req.method ?? 'GET'
         if (method === 'GET') {
-          writeJson(res, 200, await run('qqmail_config', {}))
+          const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams
+          writeJson(res, 200, await run('qqmail_config', params.has('account') ? { account: params.get('account')! } : {}))
           return
         }
         if (method === 'POST') {
@@ -210,7 +226,9 @@ export function makeRoutes(deps: RouteContext) {
       path: QQMAIL_API.probe,
       handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (!guard(req, res, 'POST')) return
-        writeJson(res, 200, await run('qqmail_status', { probe: true }))
+        const body = await readJsonBody(req)
+        if (!body) { writeJson(res, 400, { error: 'invalid JSON body' }); return }
+        writeJson(res, 200, await run('qqmail_status', { ...body, probe: true }))
       },
     },
     {
@@ -219,7 +237,7 @@ export function makeRoutes(deps: RouteContext) {
       handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (!guard(req, res, 'GET')) return
         const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams
-        writeJson(res, 200, await run('qqmail_folders', { status: params.get('status') !== '0' }))
+        writeJson(res, 200, await run('qqmail_folders', { ...queryArgs(params), status: params.get('status') !== '0' }))
       },
     },
     {

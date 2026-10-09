@@ -294,7 +294,8 @@ if (!pack.ok) {
 }
 let packed = null
 try {
-  packed = JSON.parse(pack.stdout)[0]
+  const parsed = JSON.parse(pack.stdout)
+  packed = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0]
 } catch {
   // 仍然兜底：抓 stdout 里最后一个 JSON 数组（构建脚本可能插了别的输出）
   const start = pack.stdout.lastIndexOf('[')
@@ -307,7 +308,7 @@ try {
     }
   }
 }
-if (packed === null) {
+if (!packed || typeof packed.filename !== 'string') {
   fail('无法解析 npm pack 输出')
   finish()
 }
@@ -515,7 +516,7 @@ if (!listening) {
   warn('实例没起来，跳过宿主半验证')
 } else {
   try {
-    const response = await fetch(`${base}${healthPath}`)
+    const response = await browse(`${base}${healthPath}`)
     const text = await response.text()
     if (response.ok) pass('健康路由可用', `${healthPath} → ${response.status} ${text.slice(0, 70)}`)
     else fail('健康路由返回非 2xx', `${healthPath} → ${response.status} ${text.slice(0, 120)}`)
@@ -536,15 +537,15 @@ if (!hasClient) {
   try {
     const index = await browse(token === '' ? `${base}/` : `${base}/?token=${token}`)
     const html = await index.text()
-    const urls = [...html.matchAll(/\/plugins\/\?\?[^"\\\s]+/g)].map((match) => match[0].replaceAll('&amp;', '&'))
-    const bundleUrl = urls.sort((a, b) => b.length - a.length)[0] ?? ''
+    const urls = [...html.matchAll(/(?:\/)?plugins\/\?\?[^"\\\s]+/g)].map((match) => match[0].replaceAll('&amp;', '&'))
+    const bundleUrl = urls.find((url) => url.includes(`${id}/client.js`)) ?? ''
     if (index.status === 401) {
       warn('抓 index 被拒（没有 token），跳过运行时界面校验（静态校验已通过）')
     } else if (bundleUrl === '') fail('index 里找不到客户端 bundle 交付地址（客户端半没注册）', `HTTP ${index.status}${bootErrors(readBootLog()).length > 0 ? '｜' + bootErrors(readBootLog())[0] : ''}`)
     else if (bundleUrl.includes(`${id}/client.js`)) pass('bundle 已被 shell 收进启动清单', `${id}/client.js`)
     else fail('bundle 没进启动清单（面板/入口不会出现）', bundleUrl.slice(0, 150))
     if (bundleUrl !== '') {
-      const bundle = await (await fetch(`${base}${bundleUrl}`)).text()
+      const bundle = await (await browse(new URL(bundleUrl, base + '/').toString())).text()
       if (bundle.includes(id)) pass('bundle 可下载且含插件标记', `${(bundle.length / 1024).toFixed(0)} kB`)
       else fail('bundle 内容里找不到插件 id')
     }
@@ -561,7 +562,7 @@ if (options.restartRoute !== '') {
     warn('实例没起来，跳过')
   } else {
     try {
-      const before = await (await fetch(`${base}${healthPath}`)).json().catch(() => null)
+      const before = await (await browse(`${base}${healthPath}`)).json().catch(() => null)
       const response = await fetch(`${base}${options.restartRoute}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -575,7 +576,7 @@ if (options.restartRoute !== '') {
         let newPid = null
         while (Date.now() < limit) {
           try {
-            const live = await (await fetch(`${base}${healthPath}`)).json()
+            const live = await (await browse(`${base}${healthPath}`)).json()
             if (before === null || live.pid !== before.pid) {
               newPid = live.pid
               break
@@ -609,7 +610,7 @@ if (listening && !options.skipStability) {
   let firstError = ''
   while (Date.now() < deadline2) {
     try {
-      const response = await fetch(`${base}${healthPath}`)
+      const response = await browse(`${base}${healthPath}`)
       if (!response.ok) {
         alive = false
         firstError = `健康路由 ${response.status}`

@@ -152,3 +152,12 @@ See `PORTABILITY-SOP.md` for the release gate this plugin is verified against.
 ## License
 
 MIT
+
+
+## Multi-account development build
+
+Use qqmail_config with account:"__new__" or qqmail_accounts action:"add" to add a mailbox (email/authCode, optional id/label/preset). Omitting account updates the default mailbox. Existing tools accept an account id or email; unknown references fail with available choices. UIDs are scoped to account + mailbox. qqmail_accounts lists, selects the default and removes with confirm:true. CLI supports --account; MCP uses the same specs.
+
+For custom business/education domains hosted by Tencent, explicitly set preset:"qq-exmail". Signatures, saveSent, previewInList and download directories are account settings; readOnly is plugin-wide. Multi-account default downloads use per-id subdirectories, while single-account paths remain compatible.
+
+The multi-account UI and live dual-mailbox acceptance are pending. Use an isolated development profile before replacing an active desktop installation. See docs/multi-account-core.md.

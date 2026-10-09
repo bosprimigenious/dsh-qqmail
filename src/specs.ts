@@ -21,7 +21,7 @@ import { formatAddress, formatSize, localDateTime, safeFilename, truncate } from
 import { PRESET_IDS, PRESETS } from './core/presets.ts'
 import type { ParamSpec } from './core/schema.ts'
 import type { MailboxInfo, MessageDetail, MessageSummary, PresetId } from './core/types.ts'
-import type { MailStore } from './store.ts'
+import { resolveAccountRef, type MailStore } from './store.ts'
 
 /** Result shape shared by every tool. */
 export interface SpecResult {
@@ -265,15 +265,20 @@ export const qqmailStatusSpec: ToolSpec = {
   write: false,
   handler: (args, ctx) =>
     guard(async () => {
-      const view = ctx.store.view()
+      const view = ctx.store.view(typeof args.account === 'string' ? args.account : undefined)
       const lines = viewLines(view)
       let data: Record<string, unknown> = { ...view, configPath: view.configPath }
+      const accounts = ctx.store.listAccounts()
+      if (accounts.accounts.length > 1 || accounts.warning) {
+        data = { ...data, accounts: accounts.accounts, defaultAccount: accounts.defaultAccount, resolvedDefaultAccount: accounts.resolvedDefaultAccount, warning: accounts.warning }
+        if (accounts.warning) lines.push(accounts.warning)
+      }
       const probe = bool(args, 'probe', false)
       if (probe) {
-        if (!ctx.service.isConfigured()) {
+        if (!ctx.service.isConfigured(typeof args.account === 'string' ? args.account : undefined)) {
           lines.push('自检：跳过（配置不完整）')
         } else {
-          const result = await ctx.service.probe()
+          const result = await ctx.service.probe(typeof args.account === 'string' ? args.account : undefined)
           lines.push(
             '自检：IMAP ' +
               (result.imapOk ? '通过' : '失败') +
@@ -300,6 +305,9 @@ export const qqmailConfigSpec: ToolSpec = {
   description:
     '配置 dsh-qqmail 邮箱连接。最常用：email（完整邮箱地址，如 someone@qq.com）+ authCode（QQ 邮箱的 16 位授权码，不是 QQ 密码）。preset 预设服务商（qq/qq-exmail/163/126/gmail/outlook/custom，默认按 email 域名自动识别）。其余可选：fromName（发件人显示名）、signature（签名）、sentFolder（已发送文件夹路径，默认自动探测）、downloadDir（附件默认目录）、readOnly（true=只注册读取类工具，false 才开放发送/标记/移动/删除）、timeoutMs、maxParseMb、maxSendMb、previewInList（列表是否带正文预览）、saveSent（发送后是否存副本）、imap*/smtp*（自定义服务器）。传 reset: true 恢复默认。配置存 DSH_HOME 下（默认 ~/.dsh/dsh-qqmail.json，0600，含授权码）。不带任何参数调用即返回当前配置（不回显授权码）。',
   parameters: {
+    id: { type: 'string', description: '稳定账号短名；新增时可省略自动生成' },
+    label: { type: 'string', description: '账号显示名' },
+    defaultAccount: { type: 'string', description: '设默认账号（id 或邮箱地址）' },
     preset: { type: 'string', enum: [...PRESET_IDS], description: '服务商预设（默认按 email 域名自动识别）' },
     email: { type: 'string', description: '完整邮箱地址，如 someone@qq.com（同时作为 IMAP/SMTP 登录名）' },
     authCode: { type: 'string', description: '授权码（QQ 邮箱：设置→账号→开启 IMAP/SMTP 服务后生成的 16 位码）' },
@@ -326,9 +334,9 @@ export const qqmailConfigSpec: ToolSpec = {
   handler: (args, ctx) =>
     guard(async () => {
       const before = ctx.store.readOnlySync()
-      const touched = Object.keys(args).length > 0
+      const touched = Object.keys(args).some((key) => key !== 'account')
       if (!touched) {
-        const view = ctx.store.view()
+        const view = ctx.store.view(typeof args.account === 'string' ? args.account : undefined)
         return {
           ok: true,
           message: 'dsh-qqmail 当前配置（未改动）：\n' + viewLines(view).join('\n'),
@@ -336,8 +344,12 @@ export const qqmailConfigSpec: ToolSpec = {
         }
       }
       const patch: Parameters<MailStore['patch']>[0] = {}
+      if (typeof args.account === 'string') patch.account = args.account
       if (presetOf(args) !== undefined) patch.preset = presetOf(args)
       for (const key of [
+        'id',
+        'label',
+        'defaultAccount',
         'email',
         'authCode',
         'imapHost',
@@ -379,7 +391,7 @@ export const qqmailFoldersSpec: ToolSpec = {
   handler: (args, ctx) =>
     guard(async () => {
       const withStatus = bool(args, 'status', true)
-      const mailboxes = await ctx.service.folders(withStatus)
+      const mailboxes = await ctx.service.folders(withStatus, typeof args.account === 'string' ? args.account : undefined)
       const special = mailboxes.filter((entry) => entry.specialUse !== '').length
       return {
         ok: true,
@@ -419,7 +431,7 @@ export const qqmailListSpec: ToolSpec = {
         unseen: bool(args, 'unseen', false),
         flagged: bool(args, 'flagged', false),
         preview: optBool(args, 'preview'),
-      })
+      }, typeof args.account === 'string' ? args.account : undefined)
       return {
         ok: true,
         message: renderList(result),
@@ -478,7 +490,7 @@ export const qqmailSearchSpec: ToolSpec = {
         limit,
         order: str(args, 'order', 'desc') === 'asc' ? 'asc' : 'desc',
         preview: bool(args, 'preview', true),
-      })
+      }, typeof args.account === 'string' ? args.account : undefined)
       return {
         ok: true,
         message: renderList(result),
@@ -520,7 +532,7 @@ export const qqmailReadSpec: ToolSpec = {
         mailbox,
         html: bool(args, 'html', false),
         markSeen: bool(args, 'markSeen', false),
-      })
+      }, typeof args.account === 'string' ? args.account : undefined)
       const parts = result.items.map((detail) => renderDetail(detail, maxBodyChars))
       if (result.errors.length > 0) parts.push('读取失败：\n' + result.errors.map((line) => '  ' + line).join('\n'))
       return {
@@ -561,7 +573,7 @@ export const qqmailSendSpec: ToolSpec = {
         }
         outgoing.push({ filename: safeFilename(path.basename(resolved)), path: resolved })
       }
-      const view = ctx.store.view()
+      const view = ctx.store.view(typeof args.account === 'string' ? args.account : undefined)
       const body = raw(args, 'text')
       const text = view.signature.trim() === '' ? body : appendSignature(body, view.signature)
       const result = await ctx.service.send({
@@ -575,7 +587,7 @@ export const qqmailSendSpec: ToolSpec = {
         inReplyTo: '',
         references: [],
         saveSent: optBool(args, 'saveSent'),
-      })
+      }, typeof args.account === 'string' ? args.account : undefined)
       const lines = [
         '已发送：' + (str(args, 'subject') === '' ? '(无主题)' : str(args, 'subject')),
         '收件人：' + to.join(', ') + (list(args, 'cc').length > 0 ? '　抄送：' + list(args, 'cc').join(', ') : ''),
@@ -615,8 +627,9 @@ export const qqmailReplySpec: ToolSpec = {
       const body = raw(args, 'text')
       if (body.trim() === '') return { ok: false, message: '回复正文不能为空（text）。' }
       const mailbox = str(args, 'mailbox', 'INBOX') || 'INBOX'
-      const view = ctx.store.view()
-      const original = (await ctx.service.readMessages([target], { mailbox, html: false, markSeen: false })).items[0]
+      const view = ctx.store.view(typeof args.account === 'string' ? args.account : undefined)
+      const fingerprint = JSON.stringify(resolveAccountRef(ctx.store.readSync(), typeof args.account === 'string' ? args.account : undefined).config)
+      const original = (await ctx.service.readMessages([target], { mailbox, html: false, markSeen: false }, typeof args.account === 'string' ? args.account : undefined)).items[0]
       if (original === undefined) {
         return { ok: false, message: '读取原邮件失败：uid ' + String(target) + ' 在「' + mailbox + '」里不存在。' }
       }
@@ -656,6 +669,7 @@ export const qqmailReplySpec: ToolSpec = {
         outgoing.push({ filename: safeFilename(path.basename(resolved)), path: resolved })
       }
       const references = [...original.references, original.messageId].filter((entry) => entry !== '')
+      if (JSON.stringify(resolveAccountRef(ctx.store.readSync(), typeof args.account === 'string' ? args.account : undefined).config) !== fingerprint) throw new Error('邮箱配置已变更，请重新读取原邮件再回复。')
       const result = await ctx.service.send({
         to: recipients,
         cc: [],
@@ -667,7 +681,7 @@ export const qqmailReplySpec: ToolSpec = {
         inReplyTo: original.messageId,
         references,
         saveSent: optBool(args, 'saveSent'),
-      })
+      }, typeof args.account === 'string' ? args.account : undefined)
       const lines = [
         '已回复 uid ' + String(target) + '：' + subject,
         '收件人：' + recipients.join(', '),
@@ -700,7 +714,7 @@ export const qqmailMarkSpec: ToolSpec = {
       const outcome = await ctx.service.mark(targets, mailbox, {
         seen: optBool(args, 'seen'),
         flagged: optBool(args, 'flagged'),
-      })
+      }, typeof args.account === 'string' ? args.account : undefined)
       return {
         ok: true,
         message:
@@ -736,7 +750,7 @@ export const qqmailMoveSpec: ToolSpec = {
       const destination = str(args, 'destination')
       if (destination === '') return { ok: false, message: '请给出目标文件夹 destination。' }
       const mailbox = str(args, 'mailbox', 'INBOX') || 'INBOX'
-      const outcome = await ctx.service.move(targets, mailbox, destination)
+      const outcome = await ctx.service.move(targets, mailbox, destination, typeof args.account === 'string' ? args.account : undefined)
       return {
         ok: true,
         message:
@@ -772,7 +786,7 @@ export const qqmailDeleteSpec: ToolSpec = {
       if (targets.length === 0) return { ok: false, message: '请给出 uid 或 uids。' }
       const mailbox = str(args, 'mailbox', 'INBOX') || 'INBOX'
       const permanent = bool(args, 'permanent', false)
-      const outcome = await ctx.service.remove(targets, mailbox, permanent)
+      const outcome = await ctx.service.remove(targets, mailbox, permanent, typeof args.account === 'string' ? args.account : undefined)
       return {
         ok: true,
         message:
@@ -807,9 +821,11 @@ export const qqmailAttachmentSpec: ToolSpec = {
       const index = int(args, 'index', 0, 1, 1000)
       if (index < 1) return { ok: false, message: '请给出 index（附件序号，从 1 开始）。' }
       const mailbox = str(args, 'mailbox', 'INBOX') || 'INBOX'
-      const configured = ctx.store.view().downloadDir
-      const outDir = str(args, 'outDir') !== '' ? path.resolve(str(args, 'outDir')) : configured !== '' ? path.resolve(configured) : ctx.workspaceDir
-      const result = await ctx.service.downloadAttachment(uid, index, mailbox, outDir)
+      const configured = ctx.store.view(typeof args.account === 'string' ? args.account : undefined).downloadDir
+      const selected = resolveAccountRef(ctx.store.readSync(), typeof args.account === 'string' ? args.account : undefined).config
+      const baseDir = ctx.store.readSync().accounts.length > 1 && selected ? path.join(ctx.workspaceDir, selected.id) : ctx.workspaceDir
+      const outDir = str(args, 'outDir') !== '' ? path.resolve(str(args, 'outDir')) : configured !== '' ? path.resolve(configured) : baseDir
+      const result = await ctx.service.downloadAttachment(uid, index, mailbox, outDir, typeof args.account === 'string' ? args.account : undefined)
       return {
         ok: true,
         message:
@@ -827,11 +843,40 @@ export const qqmailAttachmentSpec: ToolSpec = {
     }),
 }
 
+/** Account management is available alongside config, including read-only mode. */
+export const qqmailAccountsSpec: ToolSpec = {
+  name: 'qqmail_accounts',
+  description: '管理邮箱账号：不传参数列出账号（不返回授权码）；action:add 配合 email/authCode 添加，action:setDefault 配合 account 设置默认，action:remove 配合 account 和 confirm:true 删除账号。企业/教育域名不自动推测服务商，腾讯企业邮箱请显式传 preset:qq-exmail。',
+  parameters: {
+    ...qqmailConfigSpec.parameters,
+    action: { type: 'string', enum: ['list', 'add', 'setDefault', 'remove'], description: '管理操作，默认 list' },
+    confirm: { type: 'boolean', description: '删除账号必须明确 true' },
+  },
+  write: false,
+  handler: (args, ctx) => guard(async () => {
+    const action = str(args, 'action', 'list')
+    if (action === 'add') {
+      if (str(args, 'email') === '' || str(args, 'authCode') === '') return { ok: false, message: '新增账号需要 email 和 authCode。' }
+      const { action: _action, confirm: _confirm, ...config } = args
+      return qqmailConfigSpec.handler({ ...config, account: '__new__' }, ctx)
+    }
+    if (action === 'setDefault' || action === 'remove') {
+      if (typeof args.account !== 'string' || args.account === '') return { ok: false, message: '请指定 account（账号 id 或邮箱）。' }
+      await ctx.store.patch(action === 'setDefault'
+        ? { defaultAccount: args.account }
+        : { account: args.account, remove: true, confirm: args.confirm === true })
+    } else if (action !== 'list') return { ok: false, message: '未知管理操作：' + action }
+    const data = ctx.store.listAccounts()
+    return { ok: true, message: '邮箱账号：\n' + data.accounts.map((a) => a.id + ' (' + a.email + ')' + (a.id === data.resolvedDefaultAccount ? ' [默认]' : '')).join('\n') + (data.warning ? '\n' + data.warning : ''), data }
+  }),
+}
+
 /** Every spec, in registration order. */
 export function allSpecs(): ToolSpec[] {
   return [
     qqmailStatusSpec,
     qqmailConfigSpec,
+    qqmailAccountsSpec,
     qqmailFoldersSpec,
     qqmailListSpec,
     qqmailSearchSpec,
@@ -843,6 +888,35 @@ export function allSpecs(): ToolSpec[] {
     qqmailDeleteSpec,
     qqmailAttachmentSpec,
   ]
+}
+
+// Validate and pin identity once for each operation, including reply read+send.
+// Decorating exported specs also covers direct handler callers and HTTP routes.
+for (const spec of allSpecs()) {
+  spec.parameters.account = { type: 'string', description: '账号 id 或完整邮箱地址；省略使用默认。qqmail_config 用 __new__ 新增账号。' }
+  spec.description += ' account 可选（id 或邮箱），省略使用默认账号。uid 只在「账号 + 文件夹」内唯一；跨账号使用 uid 必须同时传 account 和 mailbox。'
+  if (spec === qqmailConfigSpec) spec.description += ' 新增请传 account:__new__，配合 email/authCode；普通配置省略 account 修改默认账号。'
+  if (spec === qqmailAccountsSpec) continue
+  const handler = spec.handler
+  spec.handler = (args, ctx) => guard(async () => {
+    if (args.account !== undefined && typeof args.account !== 'string') throw new Error('account 必须是账号 id 或邮箱字符串。')
+    const ref = args.account as string | undefined
+    const adding = spec === qqmailConfigSpec && ref === '__new__'
+    const selected = adding ? undefined : resolveAccountRef(ctx.store.readSync(), ref)
+    if (selected?.error) throw new Error(selected.error)
+    const pinned = selected?.config?.id
+    const result = await handler({ ...args, ...(pinned && !(spec === qqmailConfigSpec && ref === undefined && args.reset === true) ? { account: pinned } : {}) }, ctx)
+    if (!result.ok || (ref === undefined && ctx.store.readSync().accounts.length <= 1)) return result
+    const email = result.data && typeof result.data === 'object' && 'email' in result.data ? String(result.data.email) : undefined
+    const account = spec === qqmailConfigSpec
+      ? (email ? ctx.store.readSync().accounts.find((a) => a.email === email) : resolveAccountRef(ctx.store.readSync(), typeof args.id === 'string' ? args.id : pinned).config)
+      : selected?.config
+    if (!account) return result
+    const identity = { id: account.id, email: account.email.trim() }
+    const data = result.data && typeof result.data === 'object' && !Array.isArray(result.data) ? result.data : { result: result.data }
+    return { ...result, message: '账号：' + identity.id + ' (' + identity.email + ')\n' + result.message,
+      data: { ...data, account: identity } }
+  })
 }
 
 /** Build the roster for the current mode. */

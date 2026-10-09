@@ -1,6 +1,6 @@
 # 多账号核心开发与评审
 
-关联上游 Issue #1。本阶段实现设计草案的第 1–4 步，供评审核心接口；尚未接入多账号工具参数、账号管理工具、路由、UI 和 CLI/MCP。完整改造状态为 **NOT READY**。
+关联上游 Issue #1。已实现核心迁移、13 个工具（含 qqmail_accounts）、账号参数、HTTP 路由和 CLI/MCP 入口。隔离安装及模拟双账号验收通过，可在开发 profile 绑定多个账号。多账号设置页和真实双邮箱验收尚未完成，完整改造状态为 **NOT READY**。
 
 ## 已固定的规则
 
@@ -42,12 +42,28 @@ pnpm verify
 
 新增 `tests/multi-account.mjs` 为纯离线测试：迁移读取零改动、原字节备份、0600、备份不覆盖、备份/rename/fsync/目录同步失败、跨实例并发、账号作用域、默认回落、未知引用、上限、各连接字段单独变更、会话退休及旧快照失效。原有 e2e/CLI-MCP 测试使用本机假 IMAP/SMTP 服务，不连接真实邮箱。
 
-本机 typecheck/build 和全部测试通过。直接 verify 在 npm 12 的 pack JSON 解析处失败；使用 npm 11 重跑后，DSH 0.2.0-rc.2 拒绝上游原有 peerDependencies，后续健康检查 401、客户端未交付、稳定性健康检查失败。未修改的上游基线也复现相同四项失败。因此本阶段只提交 Draft PR，不能发布或安装到正在使用的 desktop。
-
+本机 typecheck/build、冻结锁文件安装及全部 248 项测试通过。此前 verify 的 npm 12 输出解析、无鉴权健康检查与相对/分批客户端 URL 识别问题已修复；peerDependencies 与安装版 0.1.1 的 DSH 0.2.0-rc.2 兼容声明同步。当前 pnpm verify 通过干净 tarball 安装、宿主健康路由、客户端交付和 15 秒稳定性检查。另在运行中的隔离 profile 通过 HTTP/CLI 双账号模拟验收，包括新增、同 UID 隔离、probe、定向 SMTP 签名及默认切换。
 真实 v1 配置仅复制到 0600 临时文件做离线差分：默认 view、Account 旧字段及 12 个工具的空参数离线响应与旧版字节一致，迁移备份匹配原字节，真实配置内容与 mtime 不变。这不代表真实收发邮件的所有响应都已逐字节验证。
 
 ## 后续评审门禁
 
-先评审本阶段，再接入 qqmail_accounts、各工具 account 参数与 uid 作用域说明、routes、UI、CLI/MCP。多账号默认附件目录拟为 `<dataDir>/attachments/<accountId>/`；旧单账号下载路径兼容规则仍需明确。UI 全局区仅放 readOnly，账号区放各自行为选项。
+工具、routes 和 CLI/MCP 已接入账号选择；剩余为多账号 UI 和真实邮箱验收。多账号默认附件目录为 `<dataDir>/attachments/<accountId>/`；单账号无显式 downloadDir 时保持旧路径；多账号时按 id 分目录。UI 全局区仅放 readOnly，账号区放各自行为选项。
 
-完整验收还需要解决宿主兼容与 verify 门禁，并在隔离 web 或影子 profile 中验证真实两账号、同号 uid 隔离、发送签名及 fromName。desktop profile 由 Electron 管理，不使用 CLI 向其安装开发插件。
+完整验收还需要在隔离 web 或影子 profile 中验证真实两账号、同号 uid 隔离、发送签名及 fromName。desktop profile 由 Electron 管理，不使用 CLI 向其安装开发插件。
+
+
+## 使用工具绑定多个账号
+
+`qqmail_config` 省略 account 修改默认账号；新增第二个必须明确 account:__new__，或使用 qqmail_accounts action:add。账号授权码通过本地安全输入传入，不写入命令历史或 Issue/PR。
+
+```json
+{"account":"__new__","id":"work","email":"you@example.com","preset":"qq-exmail"}
+```
+
+上述例子展示非凭据参数；新增时同时提供 authCode。BUPT 等企业/教育域名不自动猜服务商，腾讯企业邮箱显式选择 qq-exmail。
+
+管理工具：qqmail_accounts 默认列出全部；action:setDefault + account 设置默认；action:remove + account + confirm:true 删除。qqmail_list/read/send/reply 等用 account:id或邮箱选择。所有工具说明包含 uid 的账号与文件夹作用域。旧单账号未指定 account 的输出保持兼容；多账号或显式选择时回显身份。
+
+HTTP /accounts GET 列出、POST 管理；/config GET 只读（只接受账号选择），POST 修改。CLI 支持 --account，并通过 config --account __new__ 或 accounts add 新增；MCP 通过统一 ToolSpec 注册。客户端仍是单账号表单，当前请用工具或 CLI 管理。
+
+运行中的宿主使用缓存；不要用独立 CLI 进程修改其同一配置后期待自动刷新。宿主运行时通过工具/HTTP 配置；离线 CLI 修改后重新启动该隔离 profile。跨进程并发写锁仍未实现。
